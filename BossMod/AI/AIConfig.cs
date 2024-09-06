@@ -1,66 +1,66 @@
 ﻿namespace BossMod.AI;
 
-[ConfigDisplay(Name = "AI Configuration", Order = 6)]
+[ConfigDisplay(Name = "AI配置", Order = 6)]
 sealed class AIConfig : ConfigNode
 {
     public enum Slot { One, Two, Three, Four }
 
-    // ui settings
-    [PropertyDisplay("Enable AI", tooltip: "Disclaimer: AI is very experimental, use at your own risk!")]
+    // UI设置
+    [PropertyDisplay("启用AI", tooltip: "免责声明：AI处于非常实验性的阶段，请自行承担风险！")]
     public bool Enabled = false;
 
-    [PropertyDisplay("Show in-game UI")]
+    [PropertyDisplay("显示游戏内UI")]
     public bool DrawUI = true;
 
-    [PropertyDisplay("Show advanced options in the UI")]
+    [PropertyDisplay("在UI中显示高级选项")]
     public bool ShowExtraUIOptions = true;
 
-    [PropertyDisplay("Show AI status in the in-game UI's title bar")]
+    [PropertyDisplay("在游戏内UI标题栏中显示AI状态")]
     public bool ShowStatusOnTitlebar = true;
 
-    [PropertyDisplay("Show AI status in the server info bar")]
+    [PropertyDisplay("在服务器信息栏中显示AI状态")]
     public bool ShowDTR = true;
 
-    // ai settings
-    [PropertyDisplay($"Override positional")]
+    // AI设置
+    [PropertyDisplay("覆盖位置偏好")]
     public bool OverridePositional = false;
 
-    [PropertyDisplay("Desired positional")]
+    [PropertyDisplay("期望的位置偏好")]
     public Positional DesiredPositional = 0;
 
-    [PropertyDisplay($"Follow slot")]
+    [PropertyDisplay("跟随槽位")]
     public Slot FollowSlot = 0;
 
-    [PropertyDisplay($"Override follow range")]
+    [PropertyDisplay("覆盖跟随距离")]
     public bool OverrideRange = false;
 
-    [PropertyDisplay($"Follow slot range")]
+    [PropertyDisplay("跟随槽位距离")]
     public float MaxDistanceToSlot = 1;
 
-    [PropertyDisplay($"Follow target")]
+    [PropertyDisplay("跟随目标")]
     public bool FollowTarget = false;
 
-    [PropertyDisplay($"Follow target range")]
+    [PropertyDisplay("跟随目标距离")]
     public float MaxDistanceToTarget = 2.6f;
 
-    [PropertyDisplay("Follow during active boss module")]
+    [PropertyDisplay("在活跃的boss模块期间跟随")]
     public bool FollowDuringActiveBossModule = false;
 
-    [PropertyDisplay("Follow during combat")]
+    [PropertyDisplay("在战斗中跟随")]
     public bool FollowDuringCombat = false;
 
-    [PropertyDisplay("Follow out of combat")]
+    [PropertyDisplay("在非战斗状态下跟随")]
     public bool FollowOutOfCombat = false;
 
-    [PropertyDisplay("Forbid movement")]
+    [PropertyDisplay("禁止移动")]
     public bool ForbidMovement = false;
 
-    [PropertyDisplay("Forbid actions")]
+    [PropertyDisplay("禁止动作")]
     public bool ForbidActions = false;
 
-    [PropertyDisplay("Focus target master")]
+    [PropertyDisplay("关注目标主控")]
     public bool FocusTargetMaster = false;
 
-    [PropertyDisplay("Broadcast keypresses to other windows")]
+    [PropertyDisplay("将按键广播到其他窗口")]
     public bool BroadcastToSlaves = false;
 }

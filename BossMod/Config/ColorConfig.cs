@@ -1,6 +1,6 @@
 ﻿namespace BossMod;
 
-[ConfigDisplay(Name = "Color Scheme", Order = -1)]
+[ConfigDisplay(Name = "配色方案", Order = -1)]
 public sealed class ColorConfig : ConfigNode
 {
     [PropertyDisplay("Planner: background")]
