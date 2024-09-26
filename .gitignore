@@ -4,4 +4,3 @@ bin/
 *.user
 logs/
 .idea
-release/
