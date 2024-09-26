@@ -1,6 +1,7 @@
 ﻿using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
 using FFXIVClientStructs.FFXIV.Client.Game.Control;
+using FFXIVClientStructs.FFXIV.Client.Game.Event;
 using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
 using FFXIVClientStructs.FFXIV.Client.Game.Object;
 using FFXIVClientStructs.FFXIV.Client.Game.UI;
@@ -53,9 +54,11 @@ public sealed unsafe class ActionManagerEx : IDisposable
     private readonly ManualActionQueueTweak _manualQueue;
     private readonly AnimationLockTweak _animLockTweak = new();
     private readonly CooldownDelayTweak _cooldownTweak = new();
-    private readonly RestoreRotationTweak _restoreRotTweak = new();
     private readonly CancelCastTweak _cancelCastTweak;
     private readonly AutoDismountTweak _dismountTweak;
+    private readonly RestoreRotationTweak _restoreRotTweak = new();
+    private readonly SmartRotationTweak _smartRotationTweak;
+    private readonly OutOfCombatActionsTweak _oocActionsTweak;
 
     private readonly HookAddress<ActionManager.Delegates.Update> _updateHook;
     private readonly HookAddress<ActionManager.Delegates.UseAction> _useActionHook;
@@ -73,8 +76,10 @@ public sealed unsafe class ActionManagerEx : IDisposable
         _hints = hints;
         _movement = movement;
         _manualQueue = new(ws, hints);
-        _cancelCastTweak = new(ws);
+        _cancelCastTweak = new(ws, hints);
         _dismountTweak = new(ws);
+        _smartRotationTweak = new(ws, hints);
+        _oocActionsTweak = new(ws);
 
         Service.Log($"[AMEx] ActionManager singleton address = 0x{(ulong)_inst:X}");
         _updateHook = new(ActionManager.Addresses.Update, UpdateDetour);
@@ -95,6 +100,7 @@ public sealed unsafe class ActionManagerEx : IDisposable
         _useActionLocationHook.Dispose();
         _useActionHook.Dispose();
         _updateHook.Dispose();
+        _oocActionsTweak.Dispose();
     }
 
     public void QueueManualActions()
@@ -106,10 +112,17 @@ public sealed unsafe class ActionManagerEx : IDisposable
     // finish gathering candidate actions for this frame: sort by priority and select best action to execute
     public void FinishActionGather()
     {
+        AutoQueue = default;
         var player = _ws.Party.Player();
-        AutoQueue = player != null ? _hints.ActionsToExecute.FindBest(_ws, player, _ws.Client.Cooldowns, EffectiveAnimationLock, _hints, _animLockTweak.DelayEstimate) : default;
+        if (player == null)
+            return;
+
+        _oocActionsTweak.FillActions(player, _hints);
+        AutoQueue = _hints.ActionsToExecute.FindBest(_ws, player, _ws.Client.Cooldowns, EffectiveAnimationLock, _hints, _animLockTweak.DelayEstimate);
         if (AutoQueue.Delay > 0)
             AutoQueue = default;
+        if (Config.PyreticThreshold > 0 && _hints.ImminentSpecialMode.mode == AIHints.SpecialMode.Pyretic && _hints.ImminentSpecialMode.activation < _ws.FutureTime(Config.PyreticThreshold) && AutoQueue.Priority < ActionQueue.Priority.ManualEmergency)
+            AutoQueue = default; // do not execute non-emergency actions when pyretic is imminent
     }
 
     public Vector3? GetWorldPosUnderCursor()
@@ -164,12 +177,14 @@ public sealed unsafe class ActionManagerEx : IDisposable
         return gcd->Total - gcd->Elapsed;
     }
 
-    public ActionID GetDutyAction(ushort slot)
+    public ClientState.DutyAction GetDutyAction(ushort slot)
     {
-        var id = ActionManager.GetDutyActionId(slot);
-        return id != 0 ? new(ActionType.Spell, id) : default;
+        var cd = EventFramework.Instance()->GetContentDirector();
+        return cd == null || !cd->DutyActionManager.ActionsPresent || slot >= cd->DutyActionManager.NumValidSlots
+            ? default
+            : new(new(ActionType.Spell, cd->DutyActionManager.ActionId[slot]), cd->DutyActionManager.CurCharges[slot], cd->DutyActionManager.MaxCharges[slot]);
     }
-    public (ActionID, ActionID) GetDutyActions() => (GetDutyAction(0), GetDutyAction(1));
+    public (ClientState.DutyAction, ClientState.DutyAction) GetDutyActions() => (GetDutyAction(0), GetDutyAction(1));
 
     public uint GetAdjustedActionID(uint actionID) => _inst->GetAdjustedActionId(actionID);
 
@@ -267,6 +282,37 @@ public sealed unsafe class ActionManagerEx : IDisposable
         }
     }
 
+    private Angle? CalculateDesiredOrientation(bool actionImminent)
+    {
+        if (actionImminent && AutoQueue.FacingAngle != null)
+            return AutoQueue.FacingAngle; // explicit angle overrides all other concerns
+
+        var player = (Character*)GameObjectManager.Instance()->Objects.IndexSorted[0].Value;
+        if (player == null)
+            return null;
+        var current = player->Rotation.Radians();
+
+        // restore rotation logic; note that movement abilities (like charge) can take multiple frames until they allow changing facing
+        var restored = MoveMightInterruptCast || actionImminent ? null : _restoreRotTweak.TryRestore(current);
+
+        // gaze avoidance & targeting
+        // note: to execute an oriented action (cast a spell or use instant), target has to be within 45 degrees of character orientation (reversed)
+        // to finish a spell without interruption, by the beginning of the slide-cast window target has to be within 75 degrees of character orientation (empyrical)
+        var castInfo = player->GetCastInfo();
+        var isCasting = castInfo != null && castInfo->IsCasting != 0;
+        var currentAction = isCasting ? new((ActionType)castInfo->ActionType, castInfo->ActionId) : actionImminent ? AutoQueue.Action : default;
+        var currentTargetId = isCasting ? (ulong)castInfo->TargetId : (AutoQueue.Target?.InstanceID ?? 0xE0000000);
+        var currentTargetSelf = currentTargetId == player->EntityId;
+        var currentTargetObj = currentTargetSelf ? &player->GameObject : currentTargetId is not 0 and not 0xE0000000 ? GameObjectManager.Instance()->Objects.GetObjectByGameObjectId(currentTargetId) : null;
+        WPos? currentTargetPos = currentTargetObj != null ? new WPos(currentTargetObj->Position.X, currentTargetObj->Position.Z) : null;
+        var currentTargetLoc = isCasting ? new WPos(castInfo->TargetLocation.X, castInfo->TargetLocation.Z) : new(AutoQueue.TargetPos.XZ()); // note: this only matters for area-targeted spells, for which targetlocation in castinfo is set correctly
+        var idealOrientation = currentAction ? _smartRotationTweak.GetSpellOrientation(GetSpellIdForAction(currentAction), new(player->Position.X, player->Position.Z), currentTargetSelf, currentTargetPos, currentTargetLoc) : null;
+        var avoidGaze = _smartRotationTweak.GetSafeRotation(current, idealOrientation, isCasting ? 75.Degrees() : 45.Degrees());
+
+        // avoiding a gaze has a priority over restore
+        return avoidGaze ?? restored;
+    }
+
     private void UpdateDetour(ActionManager* self)
     {
         var fwk = Framework.Instance();
@@ -282,25 +328,30 @@ public sealed unsafe class ActionManagerEx : IDisposable
         MoveMightInterruptCast &= CastTimeRemaining > 0; // previous cast could have ended without action effect
         MoveMightInterruptCast |= imminentActionAdj && CastTimeRemaining <= 0 && _inst->AnimationLock < 0.1f && GetAdjustedCastTime(imminentActionAdj) > 0 && GCD() < 0.1f; // if we're not casting, but will start soon, moving might interrupt future cast
         bool blockMovement = Config.PreventMovingWhileCasting && MoveMightInterruptCast && _ws.Party.Player()?.MountId == 0;
-
-        // restore rotation logic; note that movement abilities (like charge) can take multiple frames until they allow changing facing
-        var player = GameObjectManager.Instance()->Objects.IndexSorted[0].Value;
-        if (player != null && !MoveMightInterruptCast && _restoreRotTweak.TryRestore(player->Rotation.Radians(), out var restore))
-        {
-            FaceDirection(restore.ToDirection());
-        }
+        blockMovement |= Config.PyreticThreshold > 0 && _hints.ImminentSpecialMode.mode == AIHints.SpecialMode.Pyretic && _hints.ImminentSpecialMode.activation < _ws.FutureTime(Config.PyreticThreshold);
 
         // note: if we cancel movement and start casting immediately, it will be canceled some time later - instead prefer to delay for one frame
-        if (EffectiveAnimationLock <= 0 && AutoQueue.Action && !IsRecastTimerActive(AutoQueue.Action) && !(blockMovement && _movement.IsMoving()))
+        bool actionImminent = EffectiveAnimationLock <= 0 && AutoQueue.Action && !IsRecastTimerActive(AutoQueue.Action) && !(blockMovement && _movement.IsMoving());
+        var desiredRotation = CalculateDesiredOrientation(actionImminent);
+
+        // execute rotation, if needed
+        var autoRotateConfig = Framework.Instance()->SystemConfig.GetConfigOption((uint)ConfigOption.AutoFaceTargetOnAction);
+        var autoRotateOriginal = autoRotateConfig->Value.UInt;
+        if (desiredRotation != null)
+        {
+            autoRotateConfig->Value.UInt = 1;
+            FaceDirection(desiredRotation.Value.ToDirection());
+        }
+
+        if (actionImminent)
         {
             var actionAdj = NormalizeActionForQueue(AutoQueue.Action);
             var targetID = AutoQueue.Target?.InstanceID ?? 0xE0000000;
             var status = GetActionStatus(actionAdj, targetID);
             if (status == 0)
             {
-                if (AutoQueue.FacingAngle != null)
-                    FaceDirection(AutoQueue.FacingAngle.Value.ToDirection());
-
+                // disable in-game auto rotation, to prevent fucking up with our logic
+                autoRotateConfig->Value.UInt = _smartRotationTweak.Enabled ? 0 : autoRotateOriginal;
                 var res = ExecuteAction(actionAdj, targetID, AutoQueue.TargetPos);
                 //Service.Log($"[AMEx] Auto-execute {AutoQueue.Source} action {AutoQueue.Action} (=> {actionAdj}) @ {targetID:X} {Utils.Vec3String(AutoQueue.TargetPos)} => {res}");
             }
@@ -316,8 +367,8 @@ public sealed unsafe class ActionManagerEx : IDisposable
             }
         }
 
+        autoRotateConfig->Value.UInt = autoRotateOriginal;
         _cooldownTweak.StopAdjustment(); // clear any potential adjustments
-
         _movement.MovementBlocked = blockMovement;
 
         if (_ws.Party.Player()?.CastInfo != null && _cancelCastTweak.ShouldCancel(_ws.CurrentTime, ForceCancelCastNextFrame))
@@ -401,16 +452,8 @@ public sealed unsafe class ActionManagerEx : IDisposable
         // 1. action id is already unscrambled
         // 2. this function won't be called if caster object doesn't exist
         // the last point is deemed to be minor enough for us to not care, as it simplifies things (no need to hook 5 functions)
-        var info = new ActorCastEvent
-        {
-            Action = new ActionID((ActionType)header->ActionType, header->ActionId),
-            MainTargetID = header->AnimationTargetId,
-            AnimationLockTime = header->AnimationLock,
-            MaxTargets = header->NumTargets,
-            TargetPos = *targetPos,
-            SourceSequence = header->SourceSequence,
-            GlobalSequence = header->GlobalSequence,
-        };
+        var info = new ActorCastEvent(new((ActionType)header->ActionType, header->ActionId), header->AnimationTargetId, header->AnimationLock, header->NumTargets, *targetPos,
+            header->GlobalSequence, header->SourceSequence, Network.PacketDecoder.IntToFloatAngle(header->RotationInt));
         var rawEffects = (ulong*)effects;
         for (int i = 0; i < header->NumTargets; ++i)
         {

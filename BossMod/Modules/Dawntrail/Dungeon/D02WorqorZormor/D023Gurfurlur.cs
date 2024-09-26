@@ -132,7 +132,7 @@ class Sledgehammer(BossModule module) : Components.GenericWildCharge(module, 4, 
 
 class AuraSpheres : Components.PersistentInvertibleVoidzone
 {
-    public AuraSpheres(BossModule module) : base(module, 2.5f, m => m.Enemies(OID.AuraSphere).Where(x => !x.IsDead))
+    public AuraSpheres(BossModule module) : base(module, 2, m => m.Enemies(OID.AuraSphere).Where(x => !x.IsDead))
     {
         InvertResolveAt = WorldState.CurrentTime;
     }
@@ -141,6 +141,13 @@ class AuraSpheres : Components.PersistentInvertibleVoidzone
     {
         if (Sources(Module).Any(x => !Shape.Check(actor.Position, x)))
             hints.Add("Touch the balls!");
+    }
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        var shapes = Sources(Module).Select(s => ShapeDistance.InvertedCircle(s.Position + Shape.Radius * s.Rotation.ToDirection(), Shape.Radius)).ToList();
+        if (shapes.Count > 0)
+            hints.AddForbiddenZone(ShapeDistance.Intersection(shapes));
     }
 }
 
@@ -155,7 +162,17 @@ class BitingWind(BossModule module) : Components.PersistentVoidzone(module, 5, m
         {
             var dir = t.Rotation.ToDirection();
             var distToCenter = Math.Abs(dir.OrthoL().Dot(t.Position - Module.Center));
-            hints.AddForbiddenZone(ShapeDistance.Capsule(t.Position, dir, distToCenter < 10 ? 40 : 15, 5));
+            if (distToCenter < 10)
+            {
+                // normal voidzones for central ones
+                hints.AddForbiddenZone(ShapeDistance.Circle(t.Position, 5));
+                hints.AddForbiddenZone(ShapeDistance.Capsule(t.Position, dir, 20, 5), WorldState.FutureTime(2));
+            }
+            else
+            {
+                // just forbid outer ones
+                hints.AddForbiddenZone(ShapeDistance.Rect(t.Position, dir, 40, 40, 5));
+            }
         }
     }
 }

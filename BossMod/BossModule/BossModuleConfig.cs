@@ -58,7 +58,12 @@ public class BossModuleConfig : ConfigNode
     [PropertyDisplay("始终显示所有存活的队员", separator: true)]
     public bool ShowIrrelevantPlayers = false;
 
-    // 提示窗口设置
+    [PropertyDisplay("在雷达上为未着色的玩家显示基于角色的颜色")]
+    public bool ColorPlayersBasedOnRole = false;
+
+    [PropertyDisplay("始终显示焦点目标的队员", separator: true)]
+    public bool ShowFocusTargetPlayer = false;
+
     [PropertyDisplay("在单独窗口中显示文字提示", tooltip: "将雷达窗口与提示窗口分离，允许你重新定位提示窗口")]
     public bool HintsInSeparateWindow = false;
 
@@ -71,7 +76,6 @@ public class BossModuleConfig : ConfigNode
     [PropertyDisplay("显示玩家提示和警告", separator: true)]
     public bool ShowPlayerHints = true;
 
-    // 其他设置
     [PropertyDisplay("在游戏中显示移动提示", tooltip: "使用较少，但可以在游戏中显示箭头，指示在某些机制中移动的位置")]
     public bool ShowWorldArrows = false;
 }

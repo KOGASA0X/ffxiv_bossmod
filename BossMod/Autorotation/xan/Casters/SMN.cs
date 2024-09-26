@@ -192,7 +192,7 @@ public sealed class SMN(RotationModuleManager manager, Actor player) : Castxan<A
     {
         SelectPrimaryTarget(strategy, ref primaryTarget, 25);
 
-        var gauge = GetGauge<SummonerGauge>();
+        var gauge = World.Client.GetGauge<SummonerGauge>();
         TranceFlags = (SmnFlags)gauge.AetherFlags;
         SummonLeft = gauge.SummonTimer * 0.001f;
         AttunementType = (AttunementType)(gauge.Attunement & 3);
@@ -333,7 +333,7 @@ public sealed class SMN(RotationModuleManager manager, Actor player) : Castxan<A
                 {
                     static float HPRatio(Actor a) => (float)a.HPMP.CurHP / a.HPMP.MaxHP;
 
-                    var rekindleTarget = World.Party.WithoutSlot(partyOnly: true).Where(x => HPRatio(x) < 1).MinBy(HPRatio);
+                    var rekindleTarget = World.Party.WithoutSlot(excludeAlliance: true).Where(x => HPRatio(x) < 1).MinBy(HPRatio);
                     if (rekindleTarget is Actor a)
                         PushOGCD(AID.Rekindle, a);
 

@@ -2,9 +2,6 @@
 
 class P1Slipstream(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.Slipstream), new AOEShapeCone(11.7f, 45.Degrees()));
 class P1Downburst(BossModule module) : Components.Cleave(module, ActionID.MakeSpell(AID.Downburst), new AOEShapeCone(11.7f, 45.Degrees()));
-class P1MistralSongBoss(BossModule module) : Components.CastCounter(module, ActionID.MakeSpell(AID.MistralSongBoss)); // TODO: hints... (use wild charge component? need 'avoid or share-non-first' role?)
-class P1MistralSongAdds(BossModule module) : Components.CastCounter(module, ActionID.MakeSpell(AID.MistralSongAdds)); // TODO: same as boss variant + multi targets
-class P1GreatWhirlwind(BossModule module) : Components.LocationTargetedAOEs(module, ActionID.MakeSpell(AID.GreatWhirlwind), 8);
 class P1EyeOfTheStorm(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.EyeOfTheStorm), new AOEShapeDonut(12, 25));
 class P1Gigastorm(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.Gigastorm), new AOEShapeCircle(6.5f));
 class P2RadiantPlume(BossModule module) : Components.LocationTargetedAOEs(module, ActionID.MakeSpell(AID.RadiantPlumeAOE), 8);
@@ -17,7 +14,7 @@ class P3Tumult(BossModule module) : Components.CastCounter(module, ActionID.Make
 class P4Blight(BossModule module) : Components.CastCounter(module, ActionID.MakeSpell(AID.Blight));
 class P4HomingLasers(BossModule module) : Components.SpreadFromCastTargets(module, ActionID.MakeSpell(AID.HomingLasers), 4);
 class P4DiffractiveLaser(BossModule module) : Components.Cleave(module, ActionID.MakeSpell(AID.DiffractiveLaser), new AOEShapeCone(18, 45.Degrees()), (uint)OID.UltimaWeapon); // TODO: verify angle
-class P5MistralSongCone(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.MistralSongCone), new AOEShapeCone(21.7f, 45.Degrees())); // TODO: verify angle
+class P5MistralSongCone(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.MistralSongCone), new AOEShapeCone(21.7f, 75.Degrees()));
 class P5AetherochemicalLaserCenter(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.AetherochemicalLaserCenter), new AOEShapeRect(46, 4, 6));
 class P5AetherochemicalLaserRight(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.AetherochemicalLaserRight), new AOEShapeRect(46, 4, 6));
 class P5AetherochemicalLaserLeft(BossModule module) : Components.SelfTargetedAOEs(module, ActionID.MakeSpell(AID.AetherochemicalLaserLeft), new AOEShapeRect(46, 4, 6));

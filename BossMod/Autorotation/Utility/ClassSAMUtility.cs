@@ -9,7 +9,7 @@ public sealed class ClassSAMUtility(RotationModuleManager manager, Actor player)
 
     public static RotationModuleDefinition Definition()
     {
-        var res = new RotationModuleDefinition("Utility: SAM", "Planner support for utility actions", "xan, Akechi", RotationModuleQuality.Ok, BitMask.Build((int)Class.SAM), 100);
+        var res = new RotationModuleDefinition("Utility: SAM", "Planner support for utility actions", "xan, Akechi", RotationModuleQuality.Good, BitMask.Build((int)Class.SAM), 100);
         DefineShared(res, IDLimitBreak3);
 
         res.Define(Track.ThirdEye).As<EyeOption>("ThirdEye", "Eye", 600)
@@ -23,7 +23,7 @@ public sealed class ClassSAMUtility(RotationModuleManager manager, Actor player)
 
     public override void Execute(StrategyValues strategy, Actor? primaryTarget, float estimatedAnimLockDelay, float forceMovementIn, bool isMoving)
     {
-        ExecuteShared(strategy, IDLimitBreak3);
+        ExecuteShared(strategy, IDLimitBreak3, primaryTarget);
 
         var eye = strategy.Option(Track.ThirdEye);
         var eyeAction = eye.As<EyeOption>() switch

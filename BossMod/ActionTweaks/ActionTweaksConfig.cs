@@ -7,6 +7,10 @@ public sealed class ActionTweaksConfig : ConfigNode
     [PropertyDisplay("移除瞬发技能因延迟引起的额外动画锁定延迟（请阅读提示！）", tooltip: "请不要与XivAlexander或NoClippy一起使用——如果检测到这些工具，它应会自动禁用，但请务必先检查！")]
     public bool RemoveAnimationLockDelay = false;
 
+    [PropertyDisplay("动画锁定最大模拟延迟（请阅读工具提示！）", tooltip: "配置使用动画锁定移除时的最大模拟延迟（以毫秒为单位）——这是必需的，且不能减少到零。将此设置为20毫秒时，在使用自动旋转时将启用三重编织。移除三重编织的最小设置为26毫秒。20毫秒的最小值已被FFLogs接受，不应对你的日志造成问题。")]
+    [PropertySlider(20, 50, Speed = 0.1f)]
+    public int AnimationLockDelayMax = 26;
+
     [PropertyDisplay("移除因帧率引起的额外冷却延迟", tooltip: "动态调整冷却和动画锁定，以确保无论帧率限制如何，队列中的动作都能立即执行")]
     public bool RemoveCooldownDelay = false;
 
@@ -39,7 +43,12 @@ public sealed class ActionTweaksConfig : ConfigNode
     [PropertyDisplay("当目标死亡时自动取消施法")]
     public bool CancelCastOnDeadTarget = false;
 
-    [PropertyDisplay("使用技能后恢复角色朝向", tooltip: "如果游戏设置中的\"自动面向目标\"选项被禁用，此选项将无效")]
+
+    [PropertyDisplay("在即将出现类似灼热效果的机制时，防止移动和动作执行（设置为0以禁用，否则根据你的延迟增加阈值）。")]
+    [PropertySlider(0, 10, Speed = 0.01f)]
+    public float PyreticThreshold = 1.0f;
+
+    [PropertyDisplay("在使用动作后恢复角色方向（已弃用）", tooltip: "注意：此功能已被智能角色方向取代，并将在未来移除。")]
     public bool RestoreRotation = false;
 
     [PropertyDisplay("对鼠标悬停的目标使用技能")]

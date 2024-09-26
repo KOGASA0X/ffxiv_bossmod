@@ -75,9 +75,9 @@ class ReplayDetailsWindow : UIWindow
         ImGui.DragFloat("Camera azimuth", ref _azimuth, 1, -180, 180);
         ImGui.SameLine();
         ImGui.Checkbox("Override", ref _azimuthOverride);
+        _hintsBuilder.Update(_hints, _povSlot);
         if (_mgr.ActiveModule != null)
         {
-            _hintsBuilder.Update(_hints, _povSlot);
             _rmm.Update(0, float.MaxValue, false);
 
             var drawTimerPre = DateTime.Now;
@@ -137,11 +137,11 @@ class ReplayDetailsWindow : UIWindow
                 if (player != null)
                 {
                     var best = _hints.ActionsToExecute.FindBest(_mgr.WorldState, player, _mgr.WorldState.Client.Cooldowns, _mgr.WorldState.Client.AnimationLock, _hints, 0.02f);
-                    ImGui.TextUnformatted($"! {best.Action} ({best.Priority:f2}) in {best.Delay:f3}");
+                    ImGui.TextUnformatted($"! {best.Action} ({best.Priority:f2}) in {best.Delay:f3} @ {best.Target}");
                 }
                 foreach (var a in _hints.ActionsToExecute.Entries)
                 {
-                    ImGui.TextUnformatted($"> {a.Action} ({a.Priority:f2}) in {a.Delay:f3}");
+                    ImGui.TextUnformatted($"> {a.Action} ({a.Priority:f2}) in {a.Delay:f3} @ {a.Target}");
                 }
             }
         }
@@ -412,9 +412,7 @@ class ReplayDetailsWindow : UIWindow
     {
         if (!ImGui.CollapsingHeader("AI hints"))
             return;
-        if (_mgr.ActiveModule == null)
-            return;
-        var player = _mgr.ActiveModule.Raid[_povSlot];
+        var player = _player.WorldState.Party[_povSlot];
         if (player == null)
             return;
 

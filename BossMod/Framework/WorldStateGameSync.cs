@@ -1,8 +1,8 @@
 ﻿using Dalamud.Hooking;
 using Dalamud.Memory;
-using Dalamud.Utility;
 using FFXIVClientStructs.FFXIV.Client.Game;
 using FFXIVClientStructs.FFXIV.Client.Game.Character;
+using FFXIVClientStructs.FFXIV.Client.Game.Control;
 using FFXIVClientStructs.FFXIV.Client.Game.Fate;
 using FFXIVClientStructs.FFXIV.Client.Game.Group;
 using FFXIVClientStructs.FFXIV.Client.Game.InstanceContent;
@@ -11,7 +11,6 @@ using FFXIVClientStructs.FFXIV.Client.Game.UI;
 using FFXIVClientStructs.FFXIV.Client.System.Framework;
 using FFXIVClientStructs.FFXIV.Client.UI.Agent;
 using FFXIVClientStructs.Interop;
-using System.Runtime.CompilerServices;
 
 namespace BossMod;
 
@@ -384,6 +383,7 @@ sealed class WorldStateGameSync : IDisposable
         var playerMember = UpdatePartyPlayer(replay, group);
         UpdatePartyNormal(group, playerMember);
         UpdatePartyAlliance(group);
+        UpdatePartyNPCs();
 
         // update limit break
         var lb = LimitBreakController.Instance();
@@ -502,6 +502,33 @@ sealed class WorldStateGameSync : IDisposable
         }
     }
 
+    private unsafe void UpdatePartyNPCs()
+    {
+        for (int i = PartyState.MaxAllianceSize; i < PartyState.MaxAllies; ++i)
+        {
+            ref var m = ref _ws.Party.Members[i];
+            if (m.InstanceId != 0)
+            {
+                var actor = _ws.Actors.Find(m.InstanceId);
+                if (!(actor?.IsFriendlyNPC ?? false))
+                    UpdatePartySlot(i, PartyState.EmptySlot);
+            }
+        }
+        foreach (var actor in _ws.Actors)
+        {
+            if (!actor.IsFriendlyNPC)
+                continue;
+            if (_ws.Party.FindSlot(actor.InstanceID) == -1)
+            {
+                var slot = FindFreePartySlot(PartyState.MaxAllianceSize, PartyState.MaxAllies);
+                if (slot > 0)
+                    UpdatePartySlot(slot, new PartyState.Member(0, actor.InstanceID, false, actor.Name));
+                else
+                    Service.Log($"[WorldState] Failed to find empty slot for allied NPC {actor.InstanceID:X}");
+            }
+        }
+    }
+
     private unsafe bool HasBuddy(ulong instanceID)
     {
         var ui = UIState.Instance();
@@ -511,9 +538,9 @@ sealed class WorldStateGameSync : IDisposable
         return false;
     }
 
-    private int FindFreePartySlot()
+    private int FindFreePartySlot(int firstSlot, int lastSlot)
     {
-        for (int i = 1; i < PartyState.MaxPartySize; ++i)
+        for (int i = firstSlot; i < lastSlot; ++i)
             if (!_ws.Party.Members[i].IsValid())
                 return i;
         return -1;
@@ -523,7 +550,7 @@ sealed class WorldStateGameSync : IDisposable
 
     private void AddPartyMember(PartyState.Member m)
     {
-        var freeSlot = FindFreePartySlot();
+        var freeSlot = FindFreePartySlot(1, PartyState.MaxPartySize);
         if (freeSlot >= 0)
             _ws.Execute(new PartyState.OpModify(freeSlot, m));
         else
@@ -580,14 +607,27 @@ sealed class WorldStateGameSync : IDisposable
         if (!MemoryExtensions.SequenceEqual(_ws.Client.BozjaHolster.AsSpan(), bozjaHolster))
             _ws.Execute(new ClientState.OpBozjaHolsterChange(CalcBozjaHolster(bozjaHolster)));
 
+        if (!MemoryExtensions.SequenceEqual(_ws.Client.BlueMageSpells.AsSpan(), actionManager->BlueMageActions))
+            _ws.Execute(new ClientState.OpBlueMageSpellsChange(actionManager->BlueMageActions.ToArray()));
+
+        var levels = uiState->PlayerState.ClassJobLevels;
+        if (!MemoryExtensions.SequenceEqual(_ws.Client.ClassJobLevels.AsSpan(), levels))
+            _ws.Execute(new ClientState.OpClassJobLevelsChange(levels.ToArray()));
+
         var curFate = FateManager.Instance()->CurrentFate;
         ClientState.Fate activeFate = curFate != null ? new(curFate->FateId, curFate->Location, curFate->Radius) : default;
         if (_ws.Client.ActiveFate != activeFate)
             _ws.Execute(new ClientState.OpActiveFateChange(activeFate));
 
-        var levels = uiState->PlayerState.ClassJobLevels;
-        if (!MemoryExtensions.SequenceEqual(_ws.Client.ClassJobLevels.AsSpan(), levels))
-            _ws.Execute(new ClientState.OpClassJobLevelsChange(levels.ToArray()));
+        var petinfo = uiState->Buddy.PetInfo;
+        var pet = new ClientState.Pet(petinfo.Pet->EntityId, petinfo.Order, petinfo.Stance);
+        if (_ws.Client.ActivePet != pet)
+            _ws.Execute(new ClientState.OpActivePetChange(pet));
+
+        var focusTarget = TargetSystem.Instance()->FocusTarget;
+        var focusTargetId = focusTarget != null ? SanitizedObjectID(focusTarget->GetGameObjectId()) : 0;
+        if (_ws.Client.FocusTargetId != focusTargetId)
+            _ws.Execute(new ClientState.OpFocusTargetChange(focusTargetId));
     }
 
     private ulong SanitizedObjectID(ulong raw) => raw != InvalidEntityId ? raw : 0;

@@ -36,6 +36,14 @@ class WorrisomeWave(BossModule module) : Components.SelfTargetedAOEs(module, Act
 class WorrisomeWaveNuisance(BossModule module) : Components.BaitAwayIcon(module, new AOEShapeCone(24, 15.Degrees()), (uint)IconID.Nuisance, ActionID.MakeSpell(AID.WorrisomeWaveNuisance), 5.4f)
 {
     public override Actor? BaitSource(Actor target) => target;
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        base.AddAIHints(slot, actor, assignment, hints);
+        foreach (var b in ActiveBaitsOn(actor))
+            foreach (var p in Raid.WithoutSlot().Exclude(actor))
+                hints.ForbiddenDirections.Add((Angle.FromDirection(p.Position - actor.Position), 15.Degrees(), b.Activation));
+    }
 }
 
 class HydroRing(BossModule module) : Components.GenericAOEs(module, ActionID.MakeSpell(AID.HydroRing))
@@ -66,6 +74,15 @@ class AiryBubbles(BossModule module) : Components.GenericAOEs(module)
     private static readonly AOEShapeCircle _shape = new(1.1f);
 
     public override IEnumerable<AOEInstance> ActiveAOEs(int slot, Actor actor) => _bubbles.Select(b => new AOEInstance(_shape, b.Position));
+
+    public override void AddAIHints(int slot, Actor actor, PartyRolesConfig.Assignment assignment, AIHints hints)
+    {
+        foreach (var s in _bubbles)
+        {
+            hints.AddForbiddenZone(_shape.Distance(s.Position, s.Rotation));
+            hints.AddForbiddenZone(ShapeDistance.Capsule(s.Position, s.Rotation, 5, _shape.Radius), WorldState.FutureTime(2));
+        }
+    }
 
     public override void OnActorPlayActionTimelineEvent(Actor actor, ushort id)
     {

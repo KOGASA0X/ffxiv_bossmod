@@ -65,7 +65,7 @@ public sealed class DNC(RotationModuleManager manager, Actor player) : Attackxan
     {
         SelectPrimaryTarget(strategy, ref primaryTarget, range: 25);
 
-        var gauge = GetGauge<DancerGauge>();
+        var gauge = World.Client.GetGauge<DancerGauge>();
         var curStep = (uint)gauge.CurrentStep;
 
         Feathers = gauge.Feathers;
@@ -320,7 +320,7 @@ public sealed class DNC(RotationModuleManager manager, Actor player) : Attackxan
 
     private Actor? FindDancePartner()
     {
-        var partner = World.Party.WithoutSlot(partyOnly: true).Exclude(Player).Where(x => Player.DistanceToHitbox(x) <= 30).MaxBy(p => p.Class switch
+        var partner = World.Party.WithoutSlot(excludeAlliance: true).Exclude(Player).Where(x => Player.DistanceToHitbox(x) <= 30).MaxBy(p => p.Class switch
         {
             Class.SAM => 100,
             Class.NIN or Class.VPR => 99,
