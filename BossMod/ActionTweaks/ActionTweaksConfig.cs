@@ -16,8 +16,7 @@ public sealed class ActionTweaksConfig : ConfigNode
 
     [PropertyDisplay("防止施法时移动")]
     public bool PreventMovingWhileCasting = false;
-
-
+    
     public enum ModifierKey
     {
         [PropertyDisplay("None")]
@@ -60,6 +59,10 @@ public sealed class ActionTweaksConfig : ConfigNode
     [PropertyDisplay("为手动按下的技能使用自定义队列", tooltip: "此设置可以更好地与自动循环结合，并防止在自动循环过程中按下治疗技能时出现三次编织或GCD漂移的情况")]
     public bool UseManualQueue = false;
 
+
+    [PropertyDisplay("Automatically manage auto attacks", tooltip: "This setting prevents starting autos early during countdown, starts them automatically at pull, when switching targets and when using any actions that don't explicitly cancel autos.")]
+    public bool AutoAutos = false;
+    
     [PropertyDisplay("自动下坐骑以执行技能")]
     public bool AutoDismount = true;
 
