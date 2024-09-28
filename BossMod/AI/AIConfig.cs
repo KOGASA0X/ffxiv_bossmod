@@ -10,7 +10,7 @@ sealed class AIConfig : ConfigNode
     public bool Enabled = false;
 
     [PropertyDisplay("显示游戏内UI")]
-    public bool DrawUI = true;
+    public bool DrawUI = false;
 
     [PropertyDisplay("在UI中显示高级选项")]
     public bool ShowExtraUIOptions = true;

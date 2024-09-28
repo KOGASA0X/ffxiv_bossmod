@@ -8,7 +8,7 @@ public class BossModuleConfig : ConfigNode
     public BossModuleInfo.Maturity MinMaturity = BossModuleInfo.Maturity.Contributed;
 
     [PropertyDisplay("允许模块自动使用技能", tooltip: "示例：模块可以在击退发生前自动使用防击退技能")]
-    public bool AllowAutomaticActions = true;
+    public bool AllowAutomaticActions = false;
 
     [PropertyDisplay("显示测试雷达和提示窗口", tooltip: "在不进行boss战时配置雷达和提示窗口非常有用", separator: true)]
     public bool ShowDemo = false;
