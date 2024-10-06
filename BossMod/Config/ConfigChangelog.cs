@@ -98,7 +98,9 @@ public class ConfigChangelogWindow : UIWindow
         }
     }
 
+    #pragma warning disable CA1024
     private static Version GetCurrentPluginVersion()
+        #pragma warning restore CA1024
     {
 #if DEBUG
         // version is always 0.0.0.0 in debug, making it useless for testing
