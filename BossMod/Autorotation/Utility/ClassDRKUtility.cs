@@ -44,7 +44,7 @@ public sealed class ClassDRKUtility(RotationModuleManager manager, Actor player)
         return res;
     }
 
-    public override void Execute(StrategyValues strategy, Actor? primaryTarget, float estimatedAnimLockDelay, float forceMovementIn, bool isMoving)
+    public override void Execute(StrategyValues strategy, Actor? primaryTarget, float estimatedAnimLockDelay, bool isMoving)
     {
         ExecuteShared(strategy, IDLimitBreak3, IDStanceApply, IDStanceRemove, (uint)DRK.SID.Grit, primaryTarget); //Execution of our shared abilities
         ExecuteSimple(strategy.Option(Track.DarkMind), DRK.AID.DarkMind, Player); //Execution of DarkMind
@@ -74,7 +74,7 @@ public sealed class ClassDRKUtility(RotationModuleManager manager, Actor player)
 
         var dashStrategy = strategy.Option(Track.Shadowstride).As<DashStrategy>();
         if (ShouldUseDash(dashStrategy, primaryTarget))
-            Hints.ActionsToExecute.Push(ActionID.MakeSpell(DRK.AID.Shadowstride), Player, obl.Priority());
+            Hints.ActionsToExecute.Push(ActionID.MakeSpell(DRK.AID.Shadowstride), primaryTarget, obl.Priority());
     }
     private bool ShouldUseDash(DashStrategy strategy, Actor? primaryTarget) => strategy switch
     {

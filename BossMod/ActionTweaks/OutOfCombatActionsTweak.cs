@@ -1,6 +1,6 @@
 ﻿namespace BossMod;
 
-[ConfigDisplay(Name = "自动非战斗实用行动", Parent = typeof(ActionTweaksConfig))]
+[ConfigDisplay(Name = "自动非战斗实用行动", Parent = typeof(ActionTweaksConfig), Since = "0.0.0.245")]
 class OutOfCombatActionsConfig : ConfigNode
 {
     [PropertyDisplay("启用该功能")]

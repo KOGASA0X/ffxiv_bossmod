@@ -1,6 +1,6 @@
 ﻿namespace BossMod;
 
-[ConfigDisplay(Name = "智能角色朝向", Parent = typeof(ActionTweaksConfig))]
+[ConfigDisplay(Name = "智能角色朝向", Parent = typeof(ActionTweaksConfig), Since = "0.0.0.229")]
 class SmartRotationConfig : ConfigNode
 {
     [PropertyDisplay("启用该功能", tooltip: "替换游戏内“自动面向目标”选项为更智能的替代方案。\n使用动作时，只有在目标不在前方视锥内时才改变方向。\n施法期间，保持角色面向目标。")]

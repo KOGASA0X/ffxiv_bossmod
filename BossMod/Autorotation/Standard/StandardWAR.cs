@@ -195,7 +195,7 @@ public sealed class StandardWAR(RotationModuleManager manager, Actor player) : R
     private bool InMeleeRange(Actor? target) => Player.DistanceToHitbox(target) <= 3;
     private bool IsFirstGCD() => !Player.InCombat || (World.CurrentTime - Manager.CombatStart).TotalSeconds < 0.1f;
 
-    public override void Execute(StrategyValues strategy, Actor? primaryTarget, float estimatedAnimLockDelay, float forceMovementIn, bool isMoving)
+    public override void Execute(StrategyValues strategy, Actor? primaryTarget, float estimatedAnimLockDelay, bool isMoving)
     {
         Gauge = World.Client.GetGauge<WarriorGauge>().BeastGauge;
         GCDLength = ActionSpeed.GCDRounded(World.Client.PlayerStats.SkillSpeed, World.Client.PlayerStats.Haste, Player.Level);
@@ -334,7 +334,7 @@ public sealed class StandardWAR(RotationModuleManager manager, Actor player) : R
                 // special case for use as gapcloser - it has to be very high priority
                 var (prio, basePrio) = stratOnsOpt == OnslaughtStrategy.GapClose ? (OGCDPriority.GapcloseOnslaught, ActionQueue.Priority.High)
                     : LostBloodRageStacks is > 0 and < 4 ? (OGCDPriority.LostBanner, ActionQueue.Priority.Medium)
-                    : (OGCDPriority.Onslaught, OnslaughtCD < GCDLength ? ActionQueue.Priority.VeryLow : ActionQueue.Priority.Low);
+                    : (OGCDPriority.Onslaught, OnslaughtCapIn < GCDLength ? ActionQueue.Priority.Low : ActionQueue.Priority.VeryLow);
                 QueueOGCD(WAR.AID.Onslaught, target, stratOns.Value.PriorityOverride, prio, basePrio);
             }
         }
@@ -574,7 +574,8 @@ public sealed class StandardWAR(RotationModuleManager manager, Actor player) : R
         // second, if we're under IR, delaying FC/IC might then force us to spam FC/IC to avoid losing IR stacks, without being able to infuriate, and thus overcap it
         // this can only happen if we won't be able to fit extra IC though
         // note: if IR is imminent, this doesn't matter - 6 gcds is more than enough to use all FC/IC
-        if (irActive && !CanFitGCD(InnerReleaseLeft, effectiveIRStacks + 1) && !CanFitGCD(InfuriateCD - InfuriateCDReduction * effectiveIRStacks - InfuriateCDLeeway, effectiveIRStacks))
+        var numFCBeforeInf = InnerReleaseStacks + ((ncActive || Gauge > 50) ? 1 : 0);
+        if (irActive && !CanFitGCD(InnerReleaseLeft, numFCBeforeInf + 1) && !CanFitGCD(InfuriateCD - InfuriateCDReduction * numFCBeforeInf - InfuriateCDLeeway, numFCBeforeInf))
             return GCDPriority.AvoidOvercapInfuriateIR;
 
         // third, if IR is imminent, we have high (>50) gauge, we won't be able to spend this gauge (and use infuriate) before spending IR stacks
@@ -724,7 +725,9 @@ public sealed class StandardWAR(RotationModuleManager manager, Actor player) : R
             }
         }
         var nextAction = wantAOEAction ? NextComboAOE(comboStepsRemaining == 0) : NextComboSingleTarget(wantSERoute, comboStepsRemaining == 0);
-        var riskOvercappingGauge = Gauge + GaugeGainedFromAction(nextAction) > 100;
+
+        var needInfuriateSoon = Unlocked(WAR.AID.Infuriate) && !CanFitGCD(InfuriateCD - InfuriateCDReduction - InfuriateCDLeeway, 1);
+        var riskOvercappingGauge = Gauge + GaugeGainedFromAction(nextAction) > (needInfuriateSoon ? 50 : 100);
 
         // first deal with forced combo; for ST extension, we generally want to minimize overcap by using combo finisher as late as possible
         // TODO: reconsider what to do if we can't fit in combo - do we still want to do partial combo? especially if it would cause gauge overcap
@@ -900,8 +903,19 @@ public sealed class StandardWAR(RotationModuleManager manager, Actor player) : R
         if (irActive && unlockedNC)
             return (false, false);
 
+        // don't infuriate if we need to use combo for ST, and it would overcap gauge
+        // assume if ST is about to drop, we prioritize combo actions anyway
+        var (stRefreshGauge, stRefreshGCDs) = NextGCD switch
+        {
+            WAR.AID.HeavySwing => (20, 3),
+            WAR.AID.Maim => (20, 2),
+            WAR.AID.StormEye => (10, 1),
+            WAR.AID.Overpower => (20, 2),
+            WAR.AID.MythrilTempest => (20, 1),
+            _ => (30, 4)
+        };
         // don't double infuriate during opener when NC is not yet unlocked (TODO: consider making it better)
-        if (Gauge >= 50 && !CanFitGCD(SurgingTempestLeft))
+        if (Gauge + stRefreshGauge + 50 > 100 && !CanFitGCD(SurgingTempestLeft, stRefreshGCDs))
             return (false, false);
 
         // at this point, use under burst or delay outside (TODO: reconsider, we might want to be smarter here...)
