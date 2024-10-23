@@ -1,9 +1,15 @@
 ﻿namespace BossMod.AI;
 
-[ConfigDisplay(Name = "AI配置", Order = 6)]
+[ConfigDisplay(Name = "AI配置", Order = 7)]
 sealed class AIConfig : ConfigNode
 {
-    public enum Slot { One, Two, Three, Four }
+    public enum Slot
+    {
+        One,
+        Two,
+        Three,
+        Four
+    }
 
     // UI设置
     [PropertyDisplay("启用AI", tooltip: "免责声明：AI处于非常实验性的阶段，请自行承担风险！")]
@@ -58,7 +64,10 @@ sealed class AIConfig : ConfigNode
     [PropertyDisplay("禁止动作")]
     public bool ForbidActions = false;
 
-    [PropertyDisplay("关注目标主控")]
+    [PropertyDisplay("自动攻击FATE怪物", since: "0.0.0.253")]
+    public bool AutoFate = true;
+
+    [PropertyDisplay("目标设置为焦点")]
     public bool FocusTargetMaster = false;
 
     [PropertyDisplay("将按键广播到其他窗口")]
