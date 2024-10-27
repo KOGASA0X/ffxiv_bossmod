@@ -6,7 +6,7 @@
   "compilationOptions": {},
   "targets": {
     ".NETCoreApp,Version=v8.0": {
-      "BossMod/0.0.0.261": {
+      "BossMod/0.0.0.262": {
         "dependencies": {
           "DalamudPackager": "2.1.13",
           "FFXIVClientStructs": "1.0.0",
@@ -731,7 +731,7 @@
     }
   },
   "libraries": {
-    "BossMod/0.0.0.261": {
+    "BossMod/0.0.0.262": {
       "type": "project",
       "serviceable": false,
       "sha512": ""
