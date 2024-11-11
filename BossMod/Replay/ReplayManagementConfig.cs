@@ -19,8 +19,11 @@ public class ReplayManagementConfig : ConfigNode
     [PropertyDisplay("在录像中存储服务器数据包")]
     public bool DumpServerPackets = false;
 
-    //[PropertyDisplay("Store client packets in the replay")]
-    //public bool DumpClientPackets = false;
+    [PropertyDisplay("Ignore packets for other players when dumping to dalamud.log")]
+    public bool DumpServerPacketsPlayerOnly = false;
+
+    [PropertyDisplay("Dump client packets into dalamud.log")]
+    public bool DumpClientPackets = false;
 
     [PropertyDisplay("格式化录像 log")]
     public ReplayLogFormat WorldLogFormat = ReplayLogFormat.BinaryCompressed;
