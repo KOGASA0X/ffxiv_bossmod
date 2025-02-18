@@ -33,8 +33,13 @@ sealed class AIConfig : ConfigNode
 
     [PropertyDisplay("期望的位置偏好")]
     public Positional DesiredPositional = 0;
+    
+    [PropertyDisplay("移动延迟（秒）", tooltip: "保持此值较低！如果设置得太高，某些机制下它将无法及时移动。")]
+    public float MoveDelay = 0f;
 
-    [PropertyDisplay("跟随槽位")]
+    // ai settings
+    // TODO: this is really bad, it should not be here! it's a transient thing, doesn't make sense to preserve in config
+    [PropertyDisplay("跟随Slot")]
     public Slot FollowSlot = 0;
 
     [PropertyDisplay("覆盖跟随距离")]

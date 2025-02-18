@@ -57,10 +57,24 @@ public sealed class ClientState
     public Fate ActiveFate;
     public Pet ActivePet;
     public ulong FocusTargetId;
+    public Angle ForcedMovementDirection; // used for temporary misdirection and spinning states
+    public uint[] ContentKeyValueData = new uint[6]; // used for content-specific persistent player attributes, like bozja resistance rank
+
+    public uint GetContentValue(uint key) => ContentKeyValueData[0] == key
+        ? ContentKeyValueData[1]
+        : ContentKeyValueData[2] == key
+            ? ContentKeyValueData[3]
+            : ContentKeyValueData[4] == key
+                ? ContentKeyValueData[5]
+                : 0;
+
+    public uint ElementalLevel => GetContentValue(4);
+    public uint ElementalLevelSynced => GetContentValue(2);
+    public uint ResistanceRank => GetContentValue(5);
 
     public int ClassJobLevel(Class c)
     {
-        var index = Service.LuminaRow<Lumina.Excel.GeneratedSheets.ClassJob>((uint)c)?.ExpArrayIndex ?? -1;
+        var index = Service.LuminaRow<Lumina.Excel.Sheets.ClassJob>((uint)c)?.ExpArrayIndex ?? -1;
         return index >= 0 && index < ClassJobLevels.Length ? ClassJobLevels[index] : -1;
     }
 
@@ -114,6 +128,9 @@ public sealed class ClientState
 
         if (FocusTargetId != 0)
             yield return new OpFocusTargetChange(FocusTargetId);
+
+        if (ForcedMovementDirection != default)
+            yield return new OpForcedMovementDirectionChange(ForcedMovementDirection);
     }
 
     public void Tick(float dt)
@@ -339,5 +356,33 @@ public sealed class ClientState
             ws.Client.FocusTargetChanged.Fire(this);
         }
         public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("CLFT"u8).Emit(Value, "X8");
+    }
+
+    public Event<OpForcedMovementDirectionChange> ForcedMovementDirectionChanged = new();
+    public sealed record class OpForcedMovementDirectionChange(Angle Value) : WorldState.Operation
+    {
+        protected override void Exec(WorldState ws)
+        {
+            ws.Client.ForcedMovementDirection = Value;
+            ws.Client.ForcedMovementDirectionChanged.Fire(this);
+        }
+        public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("CLFD"u8).Emit(Value);
+    }
+
+    public Event<OpContentKVDataChange> ContentKVDataChanged = new();
+    public sealed record class OpContentKVDataChange(uint[] Value) : WorldState.Operation
+    {
+        public readonly uint[] Value = Value;
+        protected override void Exec(WorldState ws)
+        {
+            ws.Client.ContentKeyValueData = Value;
+            ws.Client.ContentKVDataChanged.Fire(this);
+        }
+        public override void Write(ReplayRecorder.Output output)
+        {
+            output.EmitFourCC("CLKV"u8);
+            foreach (var val in Value)
+                output.Emit(val);
+        }
     }
 }

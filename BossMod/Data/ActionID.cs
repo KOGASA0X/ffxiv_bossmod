@@ -25,6 +25,8 @@ public enum ActionType : byte
     // below are custom additions, these aren't proper actions from game's point of view, but it makes sense for us to treat them as such
     BozjaHolsterSlot0 = 0xE0, // id = BozjaHolsterID, use from holster to replace duty action 0
     BozjaHolsterSlot1 = 0xE1, // id = BozjaHolsterID, use from holster to replace duty action 1
+    Pomander = 0xE2, // id = PomanderID
+    Magicite = 0xE3, // id = slot (1-3)
 }
 
 public enum Positional { Any, Flank, Rear, Front }
@@ -44,8 +46,8 @@ public readonly record struct ActionID(uint Raw)
 
     public readonly string Name() => Type switch
     {
-        ActionType.Spell => Service.LuminaRow<Lumina.Excel.GeneratedSheets.Action>(ID)?.Name ?? "<not found>",
-        ActionType.Item => $"{Service.LuminaRow<Lumina.Excel.GeneratedSheets.Item>(ID % 1000000)?.Name ?? "<not found>"}{(ID > 1000000 ? " (HQ)" : "")}", // see Dalamud.Game.Text.SeStringHandling.Payloads.GetAdjustedId; TODO: id > 500000 is "collectible", >2000000 is "event" ??
+        ActionType.Spell => Service.LuminaRow<Lumina.Excel.Sheets.Action>(ID)?.Name.ToString() ?? "<not found>",
+        ActionType.Item => $"{Service.LuminaRow<Lumina.Excel.Sheets.Item>(ID % 1000000)?.Name ?? "<not found>"}{(ID > 1000000 ? " (HQ)" : "")}", // see Dalamud.Game.Text.SeStringHandling.Payloads.GetAdjustedId; TODO: id > 500000 is "collectible", >2000000 is "event" ??
         ActionType.BozjaHolsterSlot0 or ActionType.BozjaHolsterSlot1 => $"{(BozjaHolsterID)ID}",
         _ => ""
     };
@@ -54,10 +56,10 @@ public readonly record struct ActionID(uint Raw)
     public readonly uint SpellId() => Type switch
     {
         ActionType.Spell => ID,
-        ActionType.Item => Service.LuminaRow<Lumina.Excel.GeneratedSheets.Item>(ID % 500000)?.ItemAction.Value?.Type ?? 0,
-        ActionType.KeyItem => Service.LuminaRow<Lumina.Excel.GeneratedSheets.EventItem>(ID)?.Action.Row ?? 0,
+        ActionType.Item => Service.LuminaRow<Lumina.Excel.Sheets.Item>(ID % 500000)?.ItemAction.ValueNullable?.Type ?? 0,
+        ActionType.KeyItem => Service.LuminaRow<Lumina.Excel.Sheets.EventItem>(ID)?.Action.RowId ?? 0,
         ActionType.Ability => 2, // 'interaction'
-        ActionType.General => Service.LuminaRow<Lumina.Excel.GeneratedSheets.GeneralAction>(ID)?.Action.Row ?? 0, // note: duty action 1/2 (26/27) use special code
+        ActionType.General => Service.LuminaRow<Lumina.Excel.Sheets.GeneralAction>(ID)?.Action.RowId ?? 0, // note: duty action 1/2 (26/27) use special code
         ActionType.Mount => 4, // 'mount'
         ActionType.Ornament => 20061, // 'accessorize'
         _ => 0
@@ -65,11 +67,11 @@ public readonly record struct ActionID(uint Raw)
 
     public readonly float CastTime() => Type switch
     {
-        ActionType.Spell => (Service.LuminaRow<Lumina.Excel.GeneratedSheets.Action>(ID)?.Cast100ms ?? 0) * 0.1f,
+        ActionType.Spell => (Service.LuminaRow<Lumina.Excel.Sheets.Action>(ID)?.Cast100ms ?? 0) * 0.1f,
         _ => 0
     };
 
-    public readonly float CastTimeExtra() => Service.LuminaRow<Lumina.Excel.GeneratedSheets.Action>(SpellId())?.Unknown38 * 0.1f ?? 0;
+    public readonly float CastTimeExtra() => Service.LuminaRow<Lumina.Excel.Sheets.Action>(SpellId())?.ExtraCastTime100ms * 0.1f ?? 0;
 
     public readonly bool IsCasted() => CastTime() > 0;
 

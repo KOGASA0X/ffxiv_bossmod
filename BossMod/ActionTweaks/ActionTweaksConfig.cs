@@ -34,18 +34,20 @@ public sealed class ActionTweaksConfig : ConfigNode
         [PropertyDisplay("LMB + RMB")]
         M12
     }
-
-
+    
     [PropertyDisplay("按住此键可在施法时允许移动", tooltip: "需要同时启用上面的设置")]
     public ModifierKey MoveEscapeHatch = ModifierKey.None;
 
     [PropertyDisplay("当目标死亡时自动取消施法")]
     public bool CancelCastOnDeadTarget = false;
 
-
     [PropertyDisplay("在即将出现类似灼热效果的机制时，防止移动和动作执行（设置为0以禁用，否则根据你的延迟增加阈值）。")]
     [PropertySlider(0, 10, Speed = 0.01f)]
     public float PyreticThreshold = 1.0f;
+    
+    [PropertyDisplay("Auto misdirection: prevent movement under misdirection if angle between normal movement and misdirected is greater than this threshold (set to 180 to disable).")]
+    [PropertySlider(0, 180)]
+    public float MisdirectionThreshold = 180;
 
     [PropertyDisplay("在使用动作后恢复角色方向（已弃用）", tooltip: "注意：此功能已被智能角色方向取代，并将在未来移除。")]
     public bool RestoreRotation = false;
@@ -59,8 +61,7 @@ public sealed class ActionTweaksConfig : ConfigNode
     [PropertyDisplay("为手动按下的技能使用自定义队列", tooltip: "此设置可以更好地与自动循环结合，并防止在自动循环过程中按下治疗技能时出现三次编织或GCD漂移的情况")]
     public bool UseManualQueue = false;
 
-
-    [PropertyDisplay("Automatically manage auto attacks", tooltip: "This setting prevents starting autos early during countdown, starts them automatically at pull, when switching targets and when using any actions that don't explicitly cancel autos.")]
+    [PropertyDisplay("自动管理自动攻击", tooltip: "此设置可防止在倒计时期间过早开始自动攻击，而是在拉怪时、切换目标时以及使用任何不显式取消自动攻击的动作时自动开始它们。")]
     public bool AutoAutos = false;
     
     [PropertyDisplay("自动下坐骑以执行技能")]
@@ -80,4 +81,7 @@ public sealed class ActionTweaksConfig : ConfigNode
 
     [PropertyDisplay("地面目标技能的自动目标选择")]
     public GroundTargetingMode GTMode = GroundTargetingMode.Manual;
+
+    [PropertyDisplay("Try to prevent dashing into AOEs", tooltip: "Prevent automatic use of damaging gap closers (like WAR Onslaught) if they would move you into a dangerous area. May not work as expected in instances that do not have modules.", since: "0.0.0.290")]
+    public bool PreventDangerousDash = false;
 }

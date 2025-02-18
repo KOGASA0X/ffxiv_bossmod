@@ -43,17 +43,79 @@ public sealed class ActorState : IEnumerable<Actor>
             for (int i = 0; i < act.Statuses.Length; ++i)
                 if (act.Statuses[i].ID != 0)
                     yield return new OpStatus(act.InstanceID, i, act.Statuses[i]);
+            for (int i = 0; i < act.IncomingEffects.Length; ++i)
+                if (act.IncomingEffects[i].GlobalSequence != 0)
+                    yield return new OpIncomingEffect(act.InstanceID, i, act.IncomingEffects[i]);
         }
     }
 
-    public void Tick(float dt)
+    public void Tick(in FrameState frame)
     {
+        var ts = frame.Timestamp;
         foreach (var act in this)
         {
             act.PrevPosRot = act.PosRot;
             if (act.CastInfo != null)
-                act.CastInfo.ElapsedTime += dt;
+                act.CastInfo.ElapsedTime = Math.Min(act.CastInfo.ElapsedTime + frame.Duration, act.CastInfo.AdjustedTotalTime);
+            RemovePendingEffects(act, (in PendingEffect p) => p.Expiration < ts);
         }
+    }
+
+    private void AddPendingEffects(Actor source, ActorCastEvent ev, DateTime timestamp)
+    {
+        var expiration = timestamp.AddSeconds(3);
+        for (int i = 0; i < ev.Targets.Count; ++i)
+        {
+            var target = ev.Targets[i].ID == source.InstanceID ? source : Find(ev.Targets[i].ID); // most common case by far is self-target
+            if (target == null)
+                continue;
+
+            foreach (var eff in ev.Targets[i].Effects)
+            {
+                var effSource = eff.FromTarget ? target : source;
+                var effTarget = eff.AtSource ? source : target;
+                var header = new PendingEffect(ev.GlobalSequence, i, effSource.InstanceID, expiration);
+                switch (eff.Type)
+                {
+                    case ActionEffectType.Damage:
+                    case ActionEffectType.BlockedDamage:
+                    case ActionEffectType.ParriedDamage:
+                        // note: if actual damage will not result in hp change (eg overkill by other pending effects, invulnerability effects), we won't get confirmation
+                        effTarget.PendingHPDifferences.Add(new(header, -eff.DamageHealValue));
+                        break;
+                    case ActionEffectType.Heal:
+                        // note: if actual heal will not result in hp change (eg 100% overheal), we won't get confirmation
+                        effTarget.PendingHPDifferences.Add(new(header, +eff.DamageHealValue));
+                        break;
+                    case ActionEffectType.MpLoss:
+                        effTarget.PendingMPDifferences.Add(new(header, -eff.Value));
+                        break;
+                    case ActionEffectType.MpGain:
+                        effTarget.PendingMPDifferences.Add(new(header, +eff.Value));
+                        break;
+                    case ActionEffectType.ApplyStatusEffectTarget:
+                    case ActionEffectType.ApplyStatusEffectSource:
+                        // note: effect reapplication (eg kardia) or some 'instant' effects (eg ast draw/earthly star) won't get confirmations
+                        effTarget.PendingStatuses.Add(new(header, eff.Value, eff.Param2));
+                        break;
+                    case ActionEffectType.RecoveredFromStatusEffect:
+                    case ActionEffectType.LoseStatusEffectTarget:
+                    case ActionEffectType.LoseStatusEffectSource:
+                        effTarget.PendingDispels.Add(new(header, eff.Value));
+                        break;
+                }
+            }
+        }
+    }
+
+    private delegate bool RemovePendingEffectPredicate(in PendingEffect effect);
+    private void RemovePendingEffects(Actor target, RemovePendingEffectPredicate predicate)
+    {
+        target.PendingHPDifferences.RemoveAll(e => predicate(e.Effect));
+        target.PendingMPDifferences.RemoveAll(e => predicate(e.Effect));
+        target.PendingStatuses.RemoveAll(e => predicate(e.Effect));
+        target.PendingDispels.RemoveAll(e => predicate(e.Effect));
+        target.PendingKnockbacks.RemoveAll(e => predicate(e));
     }
 
     // implementation of operations
@@ -326,6 +388,7 @@ public sealed class ActorState : IEnumerable<Actor>
         {
             if (actor.CastInfo?.Action == Value.Action)
                 actor.CastInfo.EventHappened = true;
+            ws.Actors.AddPendingEffects(actor, Value, ws.CurrentTime);
             ws.Actors.CastEvent.Fire(actor, Value);
         }
         public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("CST!"u8)
@@ -345,7 +408,11 @@ public sealed class ActorState : IEnumerable<Actor>
     public Event<Actor, uint, int> EffectResult = new();
     public sealed record class OpEffectResult(ulong InstanceID, uint Seq, int TargetIndex) : Operation(InstanceID)
     {
-        protected override void ExecActor(WorldState ws, Actor actor) => ws.Actors.EffectResult.Fire(actor, Seq, TargetIndex);
+        protected override void ExecActor(WorldState ws, Actor actor)
+        {
+            ws.Actors.RemovePendingEffects(actor, (in PendingEffect p) => p.GlobalSequence == Seq && p.TargetIndex == TargetIndex);
+            ws.Actors.EffectResult.Fire(actor, Seq, TargetIndex);
+        }
         public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("ER  "u8).EmitActor(InstanceID).Emit(Seq).Emit(TargetIndex);
     }
 
@@ -359,6 +426,7 @@ public sealed class ActorState : IEnumerable<Actor>
             if (prev.ID != 0 && (prev.ID != Value.ID || prev.SourceID != Value.SourceID))
                 ws.Actors.StatusLose.Fire(actor, Index);
             actor.Statuses[Index] = Value;
+            actor.PendingStatuses.RemoveAll(s => s.StatusId == Value.ID && s.Effect.SourceInstanceId == Value.SourceID);
             if (Value.ID != 0)
                 ws.Actors.StatusGain.Fire(actor, Index);
         }
@@ -371,12 +439,44 @@ public sealed class ActorState : IEnumerable<Actor>
         }
     }
 
-    // TODO: this should really be an actor field, but I have no idea what triggers icon clear...
-    public Event<Actor, uint> IconAppeared = new();
-    public sealed record class OpIcon(ulong InstanceID, uint IconID) : Operation(InstanceID)
+    public Event<Actor, int> IncomingEffectAdd = new();
+    public Event<Actor, int> IncomingEffectRemove = new();
+    public sealed record class OpIncomingEffect(ulong InstanceID, int Index, ActorIncomingEffect Value) : Operation(InstanceID)
     {
-        protected override void ExecActor(WorldState ws, Actor actor) => ws.Actors.IconAppeared.Fire(actor, IconID);
-        public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("ICON"u8).EmitActor(InstanceID).Emit(IconID);
+        protected override void ExecActor(WorldState ws, Actor actor)
+        {
+            ref var prev = ref actor.IncomingEffects[Index];
+            var prevSeq = prev.GlobalSequence;
+            var prevIdx = prev.TargetIndex;
+            if (prevSeq != 0 && (prevSeq != Value.GlobalSequence || prevIdx != Value.TargetIndex))
+            {
+                if (prev.Effects.Any(eff => eff.Type is ActionEffectType.Knockback or ActionEffectType.Attract1 or ActionEffectType.Attract2 or ActionEffectType.AttractCustom1 or ActionEffectType.AttractCustom2 or ActionEffectType.AttractCustom3))
+                    actor.PendingKnockbacks.RemoveAll(e => e.GlobalSequence == prevSeq && e.TargetIndex == prevIdx);
+                ws.Actors.IncomingEffectRemove.Fire(actor, Index);
+            }
+            actor.IncomingEffects[Index] = Value;
+            if (Value.GlobalSequence != 0)
+            {
+                if (Value.Effects.Any(eff => eff.Type is ActionEffectType.Knockback or ActionEffectType.Attract1 or ActionEffectType.Attract2 or ActionEffectType.AttractCustom1 or ActionEffectType.AttractCustom2 or ActionEffectType.AttractCustom3))
+                    actor.PendingKnockbacks.Add(new(Value.GlobalSequence, Value.TargetIndex, Value.SourceInstanceId, ws.FutureTime(3))); // note: sometimes effect can never be applied (eg if source dies shortly after actioneffect), so we need a timeout
+                ws.Actors.IncomingEffectAdd.Fire(actor, Index);
+            }
+        }
+        public override void Write(ReplayRecorder.Output output)
+        {
+            if (Value.GlobalSequence != 0)
+                output.EmitFourCC("AIE+"u8).EmitActor(InstanceID).Emit(Index).Emit(Value.GlobalSequence).Emit(Value.TargetIndex).EmitActor(Value.SourceInstanceId).Emit(Value.Action).Emit(Value.Effects);
+            else
+                output.EmitFourCC("AIE-"u8).EmitActor(InstanceID).Emit(Index);
+        }
+    }
+
+    // TODO: this should really be an actor field, but I have no idea what triggers icon clear...
+    public Event<Actor, uint, ulong> IconAppeared = new();
+    public sealed record class OpIcon(ulong InstanceID, uint IconID, ulong TargetID) : Operation(InstanceID)
+    {
+        protected override void ExecActor(WorldState ws, Actor actor) => ws.Actors.IconAppeared.Fire(actor, IconID, TargetID);
+        public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("ICON"u8).EmitActor(InstanceID).Emit(IconID).EmitActor(TargetID);
     }
 
     // TODO: this should be an actor field (?)
@@ -408,5 +508,12 @@ public sealed class ActorState : IEnumerable<Actor>
     {
         protected override void ExecActor(WorldState ws, Actor actor) => ws.Actors.EventNpcYell.Fire(actor, Message);
         public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("NYEL"u8).EmitActor(InstanceID).Emit(Message);
+    }
+
+    public Event<Actor> EventOpenTreasure = new();
+    public sealed record class OpEventOpenTreasure(ulong InstanceID) : Operation(InstanceID)
+    {
+        protected override void ExecActor(WorldState ws, Actor actor) => ws.Actors.EventOpenTreasure.Fire(actor);
+        public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("OPNT"u8).EmitActor(InstanceID);
     }
 }

@@ -1,5 +1,7 @@
 ﻿using BossMod.Autorotation;
+using Dalamud.Interface.Utility.Raii;
 using ImGuiNET;
+using System.IO;
 
 namespace BossMod.ReplayVisualization;
 
@@ -22,6 +24,7 @@ class ReplayDetailsWindow : UIWindow
     private int _povSlot = PartyState.PlayerSlot;
     private readonly ConfigUI _config;
     private bool _showConfig;
+    private bool _showDebug;
     private readonly EventList _events;
     private readonly ReplayAnalysis.AnalysisManager _analysis;
 
@@ -36,7 +39,7 @@ class ReplayDetailsWindow : UIWindow
         set => MoveTo(value);
     }
 
-    public ReplayDetailsWindow(Replay data, RotationDatabase rotationDB) : base($"Replay: {data.Path}", false, new(1500, 1000))
+    public ReplayDetailsWindow(Replay data, RotationDatabase rotationDB, DateTime? initialTime) : base($"Replay: {data.Path}", false, new(1500, 1000))
     {
         _player = new(data);
         _rotationDB = rotationDB;
@@ -44,9 +47,10 @@ class ReplayDetailsWindow : UIWindow
         _zmm = new(_player.WorldState);
         _hintsBuilder = new(_player.WorldState, _mgr, _zmm);
         _rmm = new(rotationDB, _mgr, _hints);
-        _curTime = _first = data.Ops[0].Timestamp;
+        _first = data.Ops[0].Timestamp;
         _last = data.Ops[^1].Timestamp;
-        _player.AdvanceTo(_first, _mgr.Update);
+        _curTime = initialTime ?? _first;
+        _player.AdvanceTo(_curTime, _mgr.Update);
         _config = new(Service.Config, _player.WorldState, null, null);
         _events = new(data, MoveTo, rotationDB.Plans, this);
         _analysis = new([data]);
@@ -75,19 +79,33 @@ class ReplayDetailsWindow : UIWindow
         DrawControlRow();
         DrawTimelineRow();
         ImGui.TextUnformatted($"Num loaded modules: {_mgr.LoadedModules.Count}, num active modules: {_mgr.LoadedModules.Count(m => m.StateMachine.ActiveState != null)}, active module: {_mgr.ActiveModule?.GetType()}, zone module: {_zmm.ActiveModule?.GetType()}");
-        _zmm.ActiveModule?.DrawGlobalHints();
+        if (_zmm.ActiveModule != null)
+        {
+            // TODO: reconsider where this is all drawn...
+            if (_zmm.ActiveModule.WantDrawHints())
+                _zmm.ActiveModule.DrawGlobalHints();
+            if (_zmm.ActiveModule.WantDrawExtra())
+                _zmm.ActiveModule.DrawExtra();
+        }
         if (!_azimuthOverride)
             _azimuth = _mgr.WorldState.Client.CameraAzimuth.Deg;
         ImGui.DragFloat("Camera azimuth", ref _azimuth, 1, -180, 180);
         ImGui.SameLine();
         ImGui.Checkbox("Override", ref _azimuthOverride);
-        _hintsBuilder.Update(_hints, _povSlot, float.MaxValue);
+        _hintsBuilder.Update(_hints, _povSlot, false);
         _rmm.Update(0, false);
         if (_mgr.ActiveModule != null)
         {
             var drawTimerPre = DateTime.Now;
             _mgr.ActiveModule.Draw(_azimuthOverride ? _azimuth.Degrees() : _mgr.WorldState.Client.CameraAzimuth, _povSlot, true, true);
             var drawTimerPost = DateTime.Now;
+
+            if (_showDebug && _hints.ForcedMovement != null && _mgr.ActiveModule.Raid[_povSlot] is var pc && pc != null)
+            {
+                var movementDest = pc.Position + new WDir(_hints.ForcedMovement.Value.XZ());
+                _mgr.ActiveModule.Arena.AddLine(pc.Position, movementDest, 0x80ff00ff);
+                _mgr.ActiveModule.Arena.AddCircle(movementDest, 0.5f, 0x80ff00ff);
+            }
 
             var compList = string.Join(", ", _mgr.ActiveModule.Components.Select(c => c.GetType().Name));
             var pov = _mgr.WorldState.Party[_povSlot];
@@ -201,10 +219,14 @@ class ReplayDetailsWindow : UIWindow
 
         ImGui.SameLine();
         ImGui.Checkbox("Show config", ref _showConfig);
+        ImGui.SameLine();
+        ImGui.Checkbox("Show debug", ref _showDebug);
+        ImGui.SameLine();
+        if (ImGui.Button("Split"))
+            SplitLog();
+
         if (_showConfig)
-        {
             _config.Draw();
-        }
     }
 
     private void DrawTimelineRow()
@@ -267,34 +289,58 @@ class ReplayDetailsWindow : UIWindow
         if (actor.HPMP.MaxHP > 0)
         {
             float frac = Math.Min((float)(actor.HPMP.CurHP + actor.HPMP.Shield) / actor.HPMP.MaxHP, 1);
-            ImGui.ProgressBar(frac, new(ImGui.GetColumnWidth(), 0), $"{frac * 100:f1}% ({actor.HPMP.CurHP} + {actor.HPMP.Shield} / {actor.HPMP.MaxHP})");
+            ImGui.ProgressBar(frac, new(ImGui.GetColumnWidth(), 0), $"{frac * 100:f1}% ({actor.HPMP.CurHP} + {actor.HPMP.Shield} / {actor.HPMP.MaxHP}) [{actor.PendingHPDiffence} pending]");
         }
 
         ImGui.TableNextColumn();
-        ImGui.TextUnformatted($"{(actor.IsDead ? "(Dead) " : "")}{actor} (r={actor.HitboxRadius:f2})");
+        ImGui.TextUnformatted($"{(actor.IsDead ? "(Dead) " : "")}{actor} (r={actor.HitboxRadius:f2}, s={(actor.Position - actor.PrevPosition).Length() / _player.WorldState.Frame.Duration:f3})");
 
         ImGui.TableNextColumn();
-        ImGui.TextUnformatted($"{_player.WorldState.Actors.Find(actor.TargetID)}");
+        var target = _player.WorldState.Actors.Find(actor.TargetID);
+        if (target != null)
+            ImGui.TextUnformatted($"{target} (d={(target.Position - actor.Position).Length():f3})");
 
         ImGui.TableNextColumn();
         if (actor.CastInfo != null)
             ImGui.TextUnformatted($"{actor.CastInfo.Action}: {Utils.CastTimeString(actor.CastInfo, _player.WorldState.CurrentTime)}");
 
         ImGui.TableNextColumn();
-        if (actor.MountId > 0)
+        var numRealStatuses = actor.Statuses.Count(s => s.ID != 0);
+        var numIncoming = actor.IncomingEffects.Count(i => i.GlobalSequence != 0);
+        var mouseOffset = ImGui.GetMousePos() - ImGui.GetWindowPos() - ImGui.GetCursorPos();
+        var mouseInColumn = mouseOffset.X >= 0 && mouseOffset.Y >= 0 && mouseOffset.X < ImGui.GetColumnWidth() && mouseOffset.Y < ImGui.GetFontSize() + 2 * ImGui.GetStyle().FramePadding.Y;
+        ImGui.TextUnformatted($"{(actor.PendingKnockbacks.Count > 0 ? "Knockbacks pending, " : "")}{(actor.MountId != 0 ? $"Mounted ({actor.MountId}), " : "")}{numRealStatuses} + {actor.PendingStatuses.Count} statuses, {actor.PendingDispels.Count} dispels, {numIncoming} incoming effects");
+        if (mouseInColumn && numRealStatuses + actor.PendingStatuses.Count + actor.PendingDispels.Count + numIncoming > 0)
         {
-            ImGui.TextUnformatted($"'Mounted' ({actor.MountId})");
-            ImGui.SameLine();
-        }
-        foreach (var s in actor.Statuses.Where(s => s.ID != 0))
-        {
-            var src = _player.WorldState.Actors.Find(s.SourceID);
-            if (src?.Type is ActorType.Player or ActorType.Pet)
-                continue;
-            if (s.ID is 360 or 362 or 364 or 365 or 413 or 902)
-                continue; // skip FC buff
-            ImGui.TextUnformatted($"{Utils.StatusString(s.ID)} ({s.Extra}): {Utils.StatusTimeString(s.ExpireAt, _player.WorldState.CurrentTime)}");
-            ImGui.SameLine();
+            using var tooltip = ImRaii.Tooltip();
+            if (tooltip)
+            {
+                string fromString(string prefix, ulong instanceId) => instanceId == 0 ? "" : $", {prefix} {_player.WorldState.Actors.Find(instanceId)?.ToString() ?? instanceId.ToString("X")}";
+                for (int i = 0; i < actor.Statuses.Length; ++i)
+                {
+                    ref var s = ref actor.Statuses[i];
+                    if (s.ID != 0)
+                    {
+                        ImGui.TextUnformatted($"[{i}] {Utils.StatusString(s.ID)} ({s.Extra}): {Utils.StatusTimeString(s.ExpireAt, _player.WorldState.CurrentTime)}{fromString("from", s.SourceID)}");
+                    }
+                }
+                foreach (ref var s in actor.PendingStatuses.AsSpan())
+                {
+                    ImGui.TextUnformatted($"[pending] {Utils.StatusString(s.StatusId)} ({s.ExtraLo}){fromString("from", s.Effect.SourceInstanceId)}");
+                }
+                foreach (ref var s in actor.PendingDispels.AsSpan())
+                {
+                    ImGui.TextUnformatted($"[dispel] {Utils.StatusString(s.StatusId)}{fromString("by", s.Effect.SourceInstanceId)}");
+                }
+                for (int i = 0; i < actor.IncomingEffects.Length; ++i)
+                {
+                    ref var inc = ref actor.IncomingEffects[i];
+                    if (inc.GlobalSequence != 0)
+                    {
+                        ImGui.TextUnformatted($"[incoming {i}] {inc.GlobalSequence}/{inc.TargetIndex} {inc.Action}{fromString("from", inc.SourceInstanceId)}");
+                    }
+                }
+            }
         }
     }
 
@@ -484,5 +530,18 @@ class ReplayDetailsWindow : UIWindow
     private void ResetPF()
     {
         _pfVisu = null;
+    }
+
+    private void SplitLog()
+    {
+        if (_player.Replay.Ops.Count == 0)
+            return;
+
+        var player = new ReplayPlayer(_player.Replay);
+        player.WorldState.Frame.Timestamp = _player.Replay.Ops[0].Timestamp; // so that we get correct name etc.
+        using (var relogger = new ReplayRecorder(player.WorldState, ReplayLogFormat.BinaryCompressed, false, new FileInfo(_player.Replay.Path).Directory!, "Before"))
+            player.AdvanceTo(_curTime, () => { });
+        using (var relogger = new ReplayRecorder(player.WorldState, ReplayLogFormat.BinaryCompressed, true, new FileInfo(_player.Replay.Path).Directory!, "After"))
+            player.AdvanceTo(DateTime.MaxValue, () => { });
     }
 }

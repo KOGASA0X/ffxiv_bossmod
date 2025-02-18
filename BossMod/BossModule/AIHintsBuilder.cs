@@ -5,6 +5,7 @@
 public sealed class AIHintsBuilder : IDisposable
 {
     private const float RaidwideSize = 30;
+    public const float MaxError = 2000f / 65535f; // TODO: this should really be handled by the rasterization itself...
 
     public readonly Pathfinding.ObstacleMapManager Obstacles;
     private readonly WorldState _ws;
@@ -34,16 +35,18 @@ public sealed class AIHintsBuilder : IDisposable
         Obstacles.Dispose();
     }
 
-    public void Update(AIHints hints, int playerSlot, float maxCastTime)
+    public void Update(AIHints hints, int playerSlot, bool moveImminent)
     {
-        hints.Clear();
-        hints.MaxCastTimeEstimate = maxCastTime;
         var player = _ws.Party[playerSlot];
+
+        hints.Clear();
+        if (moveImminent || player?.PendingKnockbacks.Count > 0)
+            hints.MaxCastTime = 0;
         if (player != null)
         {
             var playerAssignment = Service.Config.Get<PartyRolesConfig>()[_ws.Party.Members[playerSlot].ContentId];
             var activeModule = _bmm.ActiveModule?.StateMachine.ActivePhase != null ? _bmm.ActiveModule : null;
-            hints.FillPotentialTargets(_ws, playerAssignment == PartyRolesConfig.Assignment.MT || playerAssignment == PartyRolesConfig.Assignment.OT && !_ws.Party.WithoutSlot().Any(p => p != player && p.Role == Role.Tank));
+            FillEnemies(hints, playerAssignment == PartyRolesConfig.Assignment.MT || playerAssignment == PartyRolesConfig.Assignment.OT && !_ws.Party.WithoutSlot().Any(p => p != player && p.Role == Role.Tank));
             if (activeModule != null)
             {
                 activeModule.CalculateAIHints(playerSlot, player, playerAssignment, hints);
@@ -57,15 +60,46 @@ public sealed class AIHintsBuilder : IDisposable
         hints.Normalize();
     }
 
+    // fill list of potential targets from world state
+    private void FillEnemies(AIHints hints, bool playerIsDefaultTank)
+    {
+        var allowedFateID = Utils.IsPlayerSyncedToFate(_ws) ? _ws.Client.ActiveFate.ID : 0;
+        foreach (var actor in _ws.Actors.Where(a => a.IsTargetable && !a.IsAlly && !a.IsDead))
+        {
+            var index = actor.CharacterSpawnIndex;
+            if (index < 0 || index >= hints.Enemies.Length)
+                continue;
+
+            // determine default priority for the enemy
+            var priority = actor.FateID > 0 && actor.FateID != allowedFateID ? AIHints.Enemy.PriorityInvincible // fate mob in fate we are NOT a part of can't be damaged at all
+                : actor.PredictedDead ? AIHints.Enemy.PriorityPointless // this mob is about to be dead, any attacks will likely ghost
+                : actor.AggroPlayer ? 0 // enemies in our enmity list can be attacked, regardless of who they are targeting (since they are keeping us in combat)
+                : actor.InCombat && _ws.Party.FindSlot(actor.TargetID) >= 0 ? 0 // we generally want to assist our party members (note that it includes allied npcs in duties)
+                : AIHints.Enemy.PriorityUndesirable; // this enemy is either not pulled yet or fighting someone we don't care about - try not to aggro it by default
+
+            var enemy = hints.Enemies[index] = new(actor, priority, playerIsDefaultTank);
+            hints.PotentialTargets.Add(enemy);
+        }
+    }
+
     private void CalculateAutoHints(AIHints hints, Actor player)
     {
-        var (e, bitmap) = Obstacles.Find(player.PosRot.XYZ());
+        var inFate = Utils.IsPlayerSyncedToFate(_ws);
+        var center = inFate ? _ws.Client.ActiveFate.Center : player.PosRot.XYZ();
+        var (e, bitmap) = Obstacles.Find(center);
         var resolution = bitmap?.PixelSize ?? 0.5f;
-        if (_ws.Client.ActiveFate.ID != 0 && player.Level <= Service.LuminaRow<Lumina.Excel.GeneratedSheets.Fate>(_ws.Client.ActiveFate.ID)?.ClassJobLevelMax)
+        if (inFate)
         {
             hints.PathfindMapCenter = new(_ws.Client.ActiveFate.Center.XZ());
-            hints.PathfindMapBounds = (_activeFateBounds ??= new ArenaBoundsCircle(_ws.Client.ActiveFate.Radius));
-            // TODO: obstactles for fates, if we care?..
+            hints.PathfindMapBounds = (_activeFateBounds ??= new ArenaBoundsCircle(_ws.Client.ActiveFate.Radius, resolution));
+            if (e != null && bitmap != null)
+            {
+                var originCell = (hints.PathfindMapCenter - e.Origin) / resolution;
+                var originX = (int)originCell.X;
+                var originZ = (int)originCell.Z;
+                var halfSize = (int)(_ws.Client.ActiveFate.Radius / resolution);
+                hints.PathfindMapObstacles = new(bitmap, new(originX - halfSize, originZ - halfSize, originX + halfSize, originZ + halfSize));
+            }
         }
         else if (e != null && bitmap != null)
         {
@@ -105,11 +139,18 @@ public sealed class AIHintsBuilder : IDisposable
             var finishAt = _ws.FutureTime(aoe.Caster.CastInfo.NPCRemainingTime);
             if (aoe.IsCharge)
             {
-                hints.AddForbiddenZone(ShapeDistance.Rect(aoe.Caster.Position, target, ((AOEShapeRect)aoe.Shape).HalfWidth), finishAt);
+                hints.AddForbiddenZone(ShapeDistance.Rect(aoe.Caster.Position, target, ((AOEShapeRect)aoe.Shape).HalfWidth), finishAt, aoe.Caster.InstanceID);
+            }
+            else if (aoe.Shape is AOEShapeCone cone)
+            {
+                // not sure how best to adjust cone shape distance to account for quantization error - we just pretend it is being cast from MaxError units "behind" the reported position and increase radius similarly
+                var adjustedSourcePos = target + rot.ToDirection() * -MaxError;
+                var adjustedRadius = cone.Radius + MaxError * 2;
+                hints.AddForbiddenZone(ShapeDistance.Cone(adjustedSourcePos, adjustedRadius, rot, cone.HalfAngle), finishAt, aoe.Caster.InstanceID);
             }
             else
             {
-                hints.AddForbiddenZone(aoe.Shape, target, rot, finishAt);
+                hints.AddForbiddenZone(aoe.Shape, target, rot, finishAt, aoe.Caster.InstanceID);
             }
         }
     }
@@ -118,66 +159,66 @@ public sealed class AIHintsBuilder : IDisposable
     {
         if (actor.Type != ActorType.Enemy || actor.IsAlly)
             return;
-        var data = actor.CastInfo!.IsSpell() ? Service.LuminaRow<Lumina.Excel.GeneratedSheets.Action>(actor.CastInfo.Action.ID) : null;
-        if (data == null || data.CastType == 1)
+        var data = actor.CastInfo!.IsSpell() ? Service.LuminaRow<Lumina.Excel.Sheets.Action>(actor.CastInfo.Action.ID) : null;
+        if (data == null || data.Value.CastType == 1)
             return;
         //if (data.Omen.Row == 0)
         //    return; // to consider: ignore aoes without omen, such aoes typically need a module to resolve...
-        if (data.CastType is 2 or 5 && data.EffectRange >= RaidwideSize)
+        if (data.Value.CastType is 2 or 5 && data.Value.EffectRange >= RaidwideSize)
             return;
-        AOEShape? shape = data.CastType switch
+        AOEShape? shape = data.Value.CastType switch
         {
-            2 => new AOEShapeCircle(data.EffectRange), // used for some point-blank aoes and enemy location-targeted - does not add caster hitbox
-            3 => new AOEShapeCone(data.EffectRange + actor.HitboxRadius, DetermineConeAngle(data) * 0.5f),
-            4 => new AOEShapeRect(data.EffectRange + actor.HitboxRadius, data.XAxisModifier * 0.5f),
-            5 => new AOEShapeCircle(data.EffectRange + actor.HitboxRadius),
+            2 => new AOEShapeCircle(data.Value.EffectRange + MaxError), // used for some point-blank aoes and enemy location-targeted - does not add caster hitbox
+            3 => new AOEShapeCone(data.Value.EffectRange + actor.HitboxRadius, DetermineConeAngle(data.Value) * 0.5f),
+            4 => new AOEShapeRect(data.Value.EffectRange + actor.HitboxRadius + MaxError, data.Value.XAxisModifier * 0.5f + MaxError, MaxError),
+            5 => new AOEShapeCircle(data.Value.EffectRange + actor.HitboxRadius + MaxError),
             //6 => ???
-            //7 => new AOEShapeCircle(data.EffectRange), - used for player ground-targeted circles a-la asylum
+            //7 => new AOEShapeCircle(data.Value.EffectRange), - used for player ground-targeted circles a-la asylum
             //8 => charge rect
-            10 => new AOEShapeDonut(DetermineDonutInner(data), data.EffectRange),
-            11 => new AOEShapeCross(data.EffectRange, data.XAxisModifier * 0.5f),
-            12 => new AOEShapeRect(data.EffectRange, data.XAxisModifier * 0.5f),
-            13 => new AOEShapeCone(data.EffectRange, DetermineConeAngle(data) * 0.5f),
+            10 => new AOEShapeDonut(MathF.Max(0, DetermineDonutInner(data.Value) - MaxError), data.Value.EffectRange + MaxError),
+            11 => new AOEShapeCross(data.Value.EffectRange + MaxError, data.Value.XAxisModifier * 0.5f + MaxError),
+            12 => new AOEShapeRect(data.Value.EffectRange + MaxError, data.Value.XAxisModifier * 0.5f + MaxError, MaxError),
+            13 => new AOEShapeCone(data.Value.EffectRange, DetermineConeAngle(data.Value) * 0.5f),
             _ => null
         };
         if (shape == null)
         {
-            Service.Log($"[AutoHints] Unknown cast type {data.CastType} for {actor.CastInfo.Action}");
+            Service.Log($"[AutoHints] Unknown cast type {data.Value.CastType} for {actor.CastInfo.Action}");
             return;
         }
         var target = _ws.Actors.Find(actor.CastInfo.TargetID);
-        _activeAOEs[actor.InstanceID] = (actor, target, shape, data.CastType == 8);
+        _activeAOEs[actor.InstanceID] = (actor, target, shape, data.Value.CastType == 8);
     }
 
     private void OnCastFinished(Actor actor) => _activeAOEs.Remove(actor.InstanceID);
 
-    private Angle DetermineConeAngle(Lumina.Excel.GeneratedSheets.Action data)
+    private Angle DetermineConeAngle(Lumina.Excel.Sheets.Action data)
     {
-        var omen = data.Omen.Value;
+        var omen = data.Omen.ValueNullable;
         if (omen == null)
         {
             Service.Log($"[AutoHints] No omen data for {data.RowId} '{data.Name}'...");
             return 180.Degrees();
         }
-        var path = omen.Path.ToString();
+        var path = omen.Value.Path.ToString();
         var pos = path.IndexOf("fan", StringComparison.Ordinal);
         if (pos < 0 || pos + 6 > path.Length || !int.TryParse(path.AsSpan(pos + 3, 3), out var angle))
         {
-            Service.Log($"[AutoHints] Can't determine angle from omen ({path}/{omen.PathAlly}) for {data.RowId} '{data.Name}'...");
+            Service.Log($"[AutoHints] Can't determine angle from omen ({path}/{omen.Value.PathAlly}) for {data.RowId} '{data.Name}'...");
             return 180.Degrees();
         }
         return angle.Degrees();
     }
 
-    private float DetermineDonutInner(Lumina.Excel.GeneratedSheets.Action data)
+    private float DetermineDonutInner(Lumina.Excel.Sheets.Action data)
     {
-        var omen = data.Omen.Value;
+        var omen = data.Omen.ValueNullable;
         if (omen == null)
         {
             Service.Log($"[AutoHints] No omen data for {data.RowId} '{data.Name}'...");
             return 0;
         }
-        var path = omen.Path.ToString();
+        var path = omen.Value.Path.ToString();
         var pos = path.IndexOf("sircle_", StringComparison.Ordinal);
         if (pos >= 0 && pos + 11 <= path.Length && int.TryParse(path.AsSpan(pos + 9, 2), out var inner))
             return inner;
@@ -186,7 +227,7 @@ public sealed class AIHintsBuilder : IDisposable
         if (pos >= 0 && pos + 10 <= path.Length && int.TryParse(path.AsSpan(pos + 8, 2), out inner))
             return inner;
 
-        Service.Log($"[AutoHints] Can't determine inner radius from omen ({path}/{omen.PathAlly}) for {data.RowId} '{data.Name}'...");
+        Service.Log($"[AutoHints] Can't determine inner radius from omen ({path}/{omen.Value.PathAlly}) for {data.RowId} '{data.Name}'...");
         return 0;
     }
 }

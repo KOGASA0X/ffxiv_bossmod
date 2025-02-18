@@ -33,13 +33,13 @@ public static partial class Utils
     public static string Vec3String(Vector3 pos) => $"[{pos.X:f3}, {pos.Y:f3}, {pos.Z:f3}]";
     public static string QuatString(Quaternion q) => $"[{q.X:f2}, {q.Y:f2}, {q.Z:f2}, {q.W:f2}]";
     public static string PosRotString(Vector4 posRot) => $"[{posRot.X:f2}, {posRot.Y:f2}, {posRot.Z:f2}, {posRot.W.Radians()}]";
-    public static bool CharacterIsOmnidirectional(uint oid) => Service.LuminaRow<Lumina.Excel.GeneratedSheets.BNpcBase>(oid)?.Unknown10 ?? false;
-    public static string StatusString(uint statusID) => $"{statusID} '{Service.LuminaRow<Lumina.Excel.GeneratedSheets.Status>(statusID)?.Name ?? "<not found>"}'";
-    public static bool StatusIsRemovable(uint statusID) => Service.LuminaRow<Lumina.Excel.GeneratedSheets.Status>(statusID)?.CanDispel ?? false;
+    public static bool CharacterIsOmnidirectional(uint oid) => Service.LuminaRow<Lumina.Excel.Sheets.BNpcBase>(oid)?.IsOmnidirectional ?? false;
+    public static string StatusString(uint statusID) => $"{statusID} '{Service.LuminaRow<Lumina.Excel.Sheets.Status>(statusID)?.Name ?? "<not found>"}'";
+    public static bool StatusIsRemovable(uint statusID) => Service.LuminaRow<Lumina.Excel.Sheets.Status>(statusID)?.CanDispel ?? false;
     public static string StatusTimeString(DateTime expireAt, DateTime now) => $"{Math.Max(0, (expireAt - now).TotalSeconds):f3}";
     public static string CastTimeString(float current, float total) => $"{current:f2}/{total:f2}";
     public static string CastTimeString(ActorCastInfo cast, DateTime now) => CastTimeString(cast.ElapsedTime, cast.TotalTime);
-    public static string LogMessageString(uint id) => $"{id} '{Service.LuminaRow<Lumina.Excel.GeneratedSheets.LogMessage>(id)?.Text}'";
+    public static string LogMessageString(uint id) => $"{id} '{Service.LuminaRow<Lumina.Excel.Sheets.LogMessage>(id)?.Text}'";
 
     public static unsafe T ReadField<T>(void* address, int offset) where T : unmanaged => *(T*)((IntPtr)address + offset);
     public static unsafe void WriteField<T>(void* address, int offset, T value) where T : unmanaged => *(T*)((IntPtr)address + offset) = value;
@@ -49,6 +49,29 @@ public static partial class Utils
     public static unsafe FFXIVClientStructs.FFXIV.Client.Game.Character.BattleChara* BattleCharaInternal(IBattleChara? chara) => chara != null ? (FFXIVClientStructs.FFXIV.Client.Game.Character.BattleChara*)chara.Address : null;
 
     public static unsafe ulong SceneObjectFlags(FFXIVClientStructs.FFXIV.Client.Graphics.Scene.Object* o) => ReadField<ulong>(o, 0x38);
+
+    public static bool IsPlayerSyncedToFate(WorldState world)
+    {
+        if (world.Client.ActiveFate.ID == 0)
+            return false;
+
+        var fate = Service.LuminaRow<Lumina.Excel.Sheets.Fate>(world.Client.ActiveFate.ID);
+        if (fate == null)
+            return false;
+
+        return fate.Value.EurekaFate == 1
+            ? world.Client.ElementalLevelSynced <= fate.Value.ClassJobLevelMax
+            : world.Party.Player()?.Level <= fate.Value.ClassJobLevelMax;
+    }
+
+    // lumina extensions
+    public static int FindIndex<T>(this Lumina.Excel.Collection<T> collection, Func<T, bool> predicate) where T : struct
+    {
+        for (int i = 0; i < collection.Count; ++i)
+            if (predicate(collection[i]))
+                return i;
+        return -1;
+    }
 
     // backport from .net 6, except that it doesn't throw on empty enumerable...
     public static TSource? MinBy<TSource, TKey>(this IEnumerable<TSource> source, Func<TSource, TKey> keySelector) where TKey : IComparable
@@ -219,37 +242,6 @@ public static partial class Utils
             list.RemoveRange(last, list.Count - last);
     }
 
-    // rotate span elements left (so first element becomes last, second becomes first, etc)
-    public static void RotateLeft<T>(this Span<T> span)
-    {
-        if (span.Length == 0)
-            return;
-        var first = span[0];
-        for (int i = 1; i < span.Length; ++i)
-            span[i - 1] = span[i];
-        span[^1] = first;
-    }
-
-    // rotate span elements right (so last element becomes first, first becomes second, etc)
-    public static void RotateRight<T>(this Span<T> span)
-    {
-        if (span.Length == 0)
-            return;
-        var last = span[^1];
-        for (int i = span.Length - 1; i > 0; --i)
-            span[i] = span[i - 1];
-        span[0] = last;
-    }
-
-    // reorder element of the span to be at specified position, preserving the order of other elements
-    public static void Reorder<T>(this Span<T> span, int originalPos, int finalPos)
-    {
-        if (originalPos < finalPos)
-            RotateLeft(span[originalPos..finalPos]);
-        else
-            RotateRight(span[originalPos..finalPos]);
-    }
-
     // linear interpolation
     public static float Lerp(float a, float b, float t) => a + (b - a) * t;
 
@@ -260,6 +252,10 @@ public static partial class Utils
         Array.Fill(res, value);
         return res;
     }
+
+    // bounds-checking access
+    public static T? BoundSafeAt<T>(this T[] array, int index, T? outOfBounds = default) => index >= 0 && index < array.Length ? array[index] : outOfBounds;
+    public static T? BoundSafeAt<T>(this List<T> array, int index, T? outOfBounds = default) => index >= 0 && index < array.Count ? array[index] : outOfBounds;
 
     // get all types defined in specified assembly
     public static IEnumerable<Type?> GetAllTypes(Assembly asm)

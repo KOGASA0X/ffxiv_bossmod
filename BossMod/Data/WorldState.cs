@@ -16,8 +16,8 @@ public sealed class WorldState
     public readonly ActorState Actors = new();
     public readonly PartyState Party;
     public readonly ClientState Client = new();
+    public readonly DeepDungeonState DeepDungeon = new();
     public readonly NetworkState Network = new();
-    public readonly PendingEffects PendingEffects = new();
 
     public DateTime CurrentTime => Frame.Timestamp;
     public DateTime FutureTime(float deltaSeconds) => Frame.Timestamp.AddSeconds(deltaSeconds);
@@ -70,6 +70,8 @@ public sealed class WorldState
             yield return o;
         foreach (var o in Network.CompareToInitial())
             yield return o;
+        foreach (var o in DeepDungeon.CompareToInitial())
+            yield return o;
     }
 
     // implementation of operations
@@ -82,7 +84,7 @@ public sealed class WorldState
             ws.Client.CameraAzimuth = CameraAzimuth;
             ws.Client.GaugePayload = GaugePayload;
             ws.Client.Tick(Frame.Duration);
-            ws.Actors.Tick(Frame.Duration);
+            ws.Actors.Tick(Frame);
             ws.FrameStarted.Fire(this);
         }
         public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("FRAM"u8)
@@ -110,8 +112,7 @@ public sealed class WorldState
     {
         protected override void Exec(WorldState ws)
         {
-            lock (Service.LuminaRSVLock)
-                Service.LuminaGameData?.Excel.RsvProvider.Add(Key, Value);
+            Service.LuminaRSV[Key] = System.Text.Encoding.UTF8.GetBytes(Value); // TODO: reconsider...
             ws.RSVEntries[Key] = Value;
             ws.RSVDataReceived.Fire(this);
         }
@@ -143,5 +144,20 @@ public sealed class WorldState
     {
         protected override void Exec(WorldState ws) => ws.EnvControl.Fire(this);
         public override void Write(ReplayRecorder.Output output) => output.EmitFourCC("ENVC"u8).Emit(Index, "X2").Emit(State, "X8");
+    }
+
+    public Event<OpSystemLogMessage> SystemLogMessage = new();
+    public sealed record class OpSystemLogMessage(uint MessageId, int[] Args) : Operation
+    {
+        public readonly int[] Args = Args;
+
+        protected override void Exec(WorldState ws) => ws.SystemLogMessage.Fire(this);
+        public override void Write(ReplayRecorder.Output output)
+        {
+            output.EmitFourCC("SLOG"u8).Emit(MessageId);
+            output.Emit(Args.Length);
+            foreach (var arg in Args)
+                output.Emit(arg);
+        }
     }
 }

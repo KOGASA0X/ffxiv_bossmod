@@ -17,9 +17,10 @@ public struct NavigationDecision
     }
 
     public WPos? Destination;
+    public WPos? NextWaypoint;
+    //public float NextTurn; // > 0 if we turn left after reaching first waypoint, < 0 if we turn right, 0 otherwise (no more waypoints)
     public float LeewaySeconds; // can be used for finishing casts / slidecasting etc.
     public float TimeToGoal;
-    public Map? Map;
 
     public const float ForbiddenZoneCushion = 0; // increase to fatten forbidden zones
     public const float ActivationTimeCushion = 1; // reduce time between now and activation by this value in seconds; increase for more conservativeness
@@ -37,10 +38,11 @@ public struct NavigationDecision
         ctx.ThetaStar.Start(ctx.Map, player.Position, 1.0f / playerSpeed);
         var bestNodeIndex = ctx.ThetaStar.Execute();
         ref var bestNode = ref ctx.ThetaStar.NodeByIndex(bestNodeIndex);
-        return new() { Destination = GetFirstWaypoint(ctx.ThetaStar, ctx.Map, bestNodeIndex), LeewaySeconds = bestNode.PathLeeway, TimeToGoal = bestNode.GScore, Map = ctx.Map };
+        var waypoints = GetFirstWaypoints(ctx.ThetaStar, ctx.Map, bestNodeIndex, player.Position);
+        return new() { Destination = waypoints.first, NextWaypoint = waypoints.second, LeewaySeconds = bestNode.PathLeeway, TimeToGoal = bestNode.GScore };
     }
 
-    public static void RasterizeForbiddenZones(Map map, List<(Func<WPos, float> shapeDistance, DateTime activation)> zones, DateTime current, ref float[] scratch)
+    public static void RasterizeForbiddenZones(Map map, List<(Func<WPos, float> shapeDistance, DateTime activation, ulong source)> zones, DateTime current, ref float[] scratch)
     {
         // very slight difference in activation times cause issues for pathfinding - cluster them together
         var zonesFixed = new (Func<WPos, float> shapeDistance, float g)[zones.Count];
@@ -183,17 +185,29 @@ public struct NavigationDecision
         return float.MaxValue;
     }
 
-    private static WPos? GetFirstWaypoint(ThetaStar pf, Map map, int cell)
+    private static (WPos? first, WPos? second) GetFirstWaypoints(ThetaStar pf, Map map, int cell, WPos startingPos)
     {
         ref var startingNode = ref pf.NodeByIndex(cell);
         if (startingNode.GScore == 0 && startingNode.PathMinG == float.MaxValue)
-            return null; // we're already in safe zone
+            return (null, null); // we're already in safe zone
 
+        var nextCell = cell;
         do
         {
             ref var node = ref pf.NodeByIndex(cell);
             if (pf.NodeByIndex(node.ParentIndex).GScore == 0)
-                return pf.CellCenter(cell);
+            {
+                //var dest = pf.CellCenter(cell);
+                // if destination coord matches player coord, do not move along that coordinate, this is used for precise positioning
+                var destCoord = map.IndexToGrid(cell);
+                var playerCoordFrac = map.WorldToGridFrac(startingPos);
+                var playerCoord = map.FracToGrid(playerCoordFrac);
+                var dest = map.GridToWorld(destCoord.x, destCoord.y, destCoord.x == playerCoord.x ? playerCoordFrac.X - playerCoord.x : 0.5f, destCoord.y == playerCoord.y ? playerCoordFrac.Y - playerCoord.y : 0.5f);
+
+                var next = pf.CellCenter(nextCell);
+                return (dest, next);
+            }
+            nextCell = cell;
             cell = node.ParentIndex;
         }
         while (true);

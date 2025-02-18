@@ -3,14 +3,15 @@
 // information relevant for AI decision making process for a specific player
 public sealed class AIHints
 {
-    public class Enemy(Actor actor, bool shouldBeTanked)
+    public class Enemy(Actor actor, int priority, bool shouldBeTanked)
     {
-        // TODO: split 'pointless to attack' (eg invulnerable, but fine to hit by aoes) vs 'actually bad to hit' (eg can lead to wipe)
-        public const int PriorityForbidAI = -1; // ai is forbidden from attacking this enemy, but player explicitly targeting it is not (e.g. out of combat enemies that we might not want to pull)
-        public const int PriorityForbidFully = -2; // attacking this enemy is forbidden both by ai or player (e.g. invulnerable, or attacking/killing might lead to a wipe)
+        public const int PriorityPointless = -1; // attacking enemy won't improve your parse, but will give gauge and advance combo (e.g. boss locked to 1 HP, useless add in raid, etc)
+        public const int PriorityInvincible = -2; // attacking enemy will have no effect at all besides breaking your combo, but hitting it with AOEs is fine
+        public const int PriorityUndesirable = -3; // enemy can be attacked if targeted manually by a player, but should be considered forbidden for AOE actions (i.e. mobs that are not in combat, or are in combat with someone else's party)
+        public const int PriorityForbidden = -4; // attacking this enemy will probably lead to a wipe; autoattacks and actions that target it will be forcibly prevented (if custom queueing is enabled)
 
         public Actor Actor = actor;
-        public int Priority = actor.InCombat ? 0 : PriorityForbidAI; // <0 means damaging is actually forbidden, 0 is default (TODO: revise default...)
+        public int Priority = priority;
         //public float TimeToKill;
         public float AttackStrength = 0.05f; // target's predicted HP percent is decreased by this amount (0.05 by default)
         public WPos DesiredPosition = actor.Position; // tank AI will try to move enemy to this position
@@ -22,6 +23,7 @@ public sealed class AIHints
         public bool ShouldBeInterrupted; // if set and enemy is casting interruptible spell, some ranged/tank will try to interrupt
         public bool ShouldBeStunned; // if set, AI will stun if possible
         public bool StayAtLongRange; // if set, players with ranged attacks don't bother coming closer than max range (TODO: reconsider)
+        public bool Spikes; // if set, autoattacks will be prevented
     }
 
     public enum SpecialMode
@@ -29,7 +31,7 @@ public sealed class AIHints
         Normal,
         Pyretic, // pyretic/acceleration bomb type of effects - no movement, no actions, no casting allowed at activation time
         Freezing, // should be moving at activation time
-        // TODO: misdirection, etc
+        Misdirection, // temporary misdirection - if current time is greater than activation, use special pathfinding codepath
     }
 
     public static readonly ArenaBounds DefaultBounds = new ArenaBoundsSquare(30);
@@ -40,6 +42,10 @@ public sealed class AIHints
     public Bitmap.Region PathfindMapObstacles;
 
     // list of potential targets
+    public readonly Enemy?[] Enemies = new Enemy?[100];
+    public Enemy? FindEnemy(Actor? actor) => Enemies.BoundSafeAt(actor?.CharacterSpawnIndex ?? -1);
+
+    // enemies in priority order
     public List<Enemy> PotentialTargets = [];
     public int HighestPotentialTargetPriority;
 
@@ -55,7 +61,7 @@ public sealed class AIHints
 
     // positioning: list of shapes that are either forbidden to stand in now or will be in near future
     // AI will try to move in such a way to avoid standing in any forbidden zone after its activation or outside of some restricted zone after its activation, even at the cost of uptime
-    public List<(Func<WPos, float> shapeDistance, DateTime activation)> ForbiddenZones = [];
+    public List<(Func<WPos, float> shapeDistance, DateTime activation, ulong Source)> ForbiddenZones = [];
 
     // positioning: list of goal functions
     // AI will try to move to reach non-forbidden point with highest goal value (sum of values returned by all functions)
@@ -73,13 +79,17 @@ public sealed class AIHints
     // closest special movement/targeting/action mode, if any
     public (SpecialMode mode, DateTime activation) ImminentSpecialMode;
 
+    // for misdirection: if forced movement is set, make real direction be within this angle
+    public Angle MisdirectionThreshold;
+
     // predicted incoming damage (raidwides, tankbusters, etc.)
     // AI will attempt to shield & mitigate
     public List<(BitMask players, DateTime activation)> PredictedDamage = [];
 
-    // estimate of the maximal time we can spend casting before we need to move
-    // TODO: reconsider...
-    public float MaxCastTimeEstimate = float.MaxValue;
+    // maximal time we can spend casting before we need to move
+    // this is used by the action queue to skip casts that we won't be able to finish and execute lower-priority fallback actions instead
+    public float MaxCastTime = float.MaxValue;
+    public bool ForceCancelCast;
 
     // actions that we want to be executed, gathered from various sources (manual input, autorotation, planner, ai, modules, etc.)
     public ActionQueue ActionsToExecute = new();
@@ -97,6 +107,7 @@ public sealed class AIHints
         PathfindMapCenter = default;
         PathfindMapBounds = DefaultBounds;
         PathfindMapObstacles = default;
+        Array.Fill(Enemies, null);
         PotentialTargets.Clear();
         ForcedTarget = null;
         ForcedMovement = null;
@@ -106,43 +117,14 @@ public sealed class AIHints
         RecommendedPositional = default;
         ForbiddenDirections.Clear();
         ImminentSpecialMode = default;
+        MisdirectionThreshold = 15.Degrees();
         PredictedDamage.Clear();
-        MaxCastTimeEstimate = float.MaxValue;
+        MaxCastTime = float.MaxValue;
+        ForceCancelCast = false;
         ActionsToExecute.Clear();
         StatusesToCancel.Clear();
         WantJump = false;
         WantDismount = false;
-    }
-
-    // fill list of potential targets from world state
-    public void FillPotentialTargets(WorldState ws, bool playerIsDefaultTank)
-    {
-        bool playerInFate = ws.Client.ActiveFate.ID != 0 && ws.Party.Player()?.Level <= Service.LuminaRow<Lumina.Excel.GeneratedSheets.Fate>(ws.Client.ActiveFate.ID)?.ClassJobLevelMax;
-        var allowedFateID = playerInFate ? ws.Client.ActiveFate.ID : 0;
-        foreach (var actor in ws.Actors.Where(a => a.IsTargetable && !a.IsAlly && !a.IsDead))
-        {
-            // fate mob in fate we are NOT a part of, skip entirely. it's okay to "attack" these (i.e., they won't be added as forbidden targets) because we can't even hit them
-            // (though aggro'd mobs will continue attacking us after we unsync, but who really cares)
-            if (actor.FateID > 0 && actor.FateID != allowedFateID)
-                continue;
-
-            // target is dying; skip it so that AI retargets, but ensure that it's not marked as a forbidden target
-            // skip this check on striking dummies (name ID 541) as they die constantly
-            var predictedHP = ws.PendingEffects.PendingHPDifference(actor.InstanceID);
-            if (actor.HPMP.CurHP + predictedHP <= 0 && actor.NameID != 541)
-                continue;
-
-            var allowedAttack = actor.InCombat && ws.Party.FindSlot(actor.TargetID) >= 0;
-            // enemies in our enmity list can also be attacked, regardless of who they are targeting (since they are keeping us in combat)
-            allowedAttack |= actor.AggroPlayer;
-            // all fate mobs can be attacked if we are level synced (non synced mobs are skipped above)
-            allowedAttack |= actor.FateID > 0;
-
-            PotentialTargets.Add(new(actor, playerIsDefaultTank)
-            {
-                Priority = allowedAttack ? 0 : Enemy.PriorityForbidAI
-            });
-        }
     }
 
     public void PrioritizeTargetsByOID(uint oid, int priority = 0)
@@ -166,11 +148,17 @@ public sealed class AIHints
             h.Priority = Math.Max(h.Priority, 0);
     }
 
+    public void SetPriority(Actor actor, int priority)
+    {
+        if (FindEnemy(actor) is { } enemy)
+            enemy.Priority = priority;
+    }
+
     public void InteractWithOID(WorldState ws, uint oid) => InteractWithTarget = ws.Actors.FirstOrDefault(a => a.OID == oid && a.IsTargetable);
     public void InteractWithOID<OID>(WorldState ws, OID oid) where OID : Enum => InteractWithOID(ws, (uint)(object)oid);
 
-    public void AddForbiddenZone(Func<WPos, float> shapeDistance, DateTime activation = new()) => ForbiddenZones.Add((shapeDistance, activation));
-    public void AddForbiddenZone(AOEShape shape, WPos origin, Angle rot = new(), DateTime activation = new()) => ForbiddenZones.Add((shape.Distance(origin, rot), activation));
+    public void AddForbiddenZone(Func<WPos, float> shapeDistance, DateTime activation = new(), ulong source = 0) => ForbiddenZones.Add((shapeDistance, activation, source));
+    public void AddForbiddenZone(AOEShape shape, WPos origin, Angle rot = new(), DateTime activation = new(), ulong source = 0) => ForbiddenZones.Add((shape.Distance(origin, rot), activation, source));
 
     public void AddSpecialMode(SpecialMode mode, DateTime activation)
     {
@@ -207,7 +195,7 @@ public sealed class AIHints
     // query utilities
     public IEnumerable<Enemy> PotentialTargetsEnumerable => PotentialTargets;
     public IEnumerable<Enemy> PriorityTargets => PotentialTargets.TakeWhile(e => e.Priority == HighestPotentialTargetPriority);
-    public IEnumerable<Enemy> ForbiddenTargets => PotentialTargetsEnumerable.Reverse().TakeWhile(e => e.Priority < 0);
+    public IEnumerable<Enemy> ForbiddenTargets => PotentialTargetsEnumerable.Reverse().TakeWhile(e => e.Priority <= Enemy.PriorityUndesirable);
 
     // TODO: verify how source/target hitboxes are accounted for by various aoe shapes
     public int NumPriorityTargetsInAOE(Func<Enemy, bool> pred) => ForbiddenTargets.Any(pred) ? 0 : PriorityTargets.Count(pred);
@@ -215,8 +203,13 @@ public sealed class AIHints
     public int NumPriorityTargetsInAOECone(WPos origin, float radius, WDir direction, Angle halfAngle) => NumPriorityTargetsInAOE(a => TargetInAOECone(a.Actor, origin, radius, direction, halfAngle));
     public int NumPriorityTargetsInAOERect(WPos origin, WDir direction, float lenFront, float halfWidth, float lenBack = 0) => NumPriorityTargetsInAOE(a => TargetInAOERect(a.Actor, origin, direction, lenFront, halfWidth, lenBack));
     public bool TargetInAOECircle(Actor target, WPos origin, float radius) => target.Position.InCircle(origin, radius + target.HitboxRadius);
-    public bool TargetInAOECone(Actor target, WPos origin, float radius, WDir direction, Angle halfAngle) => target.Position.InCircleCone(origin, radius + target.HitboxRadius, direction, halfAngle);
-    public bool TargetInAOERect(Actor target, WPos origin, WDir direction, float lenFront, float halfWidth, float lenBack = 0) => target.Position.InRect(origin, direction, lenFront + target.HitboxRadius, lenBack, halfWidth);
+    public bool TargetInAOECone(Actor target, WPos origin, float radius, WDir direction, Angle halfAngle) => Intersect.CircleCone(target.Position, target.HitboxRadius, origin, radius, direction, halfAngle);
+    public bool TargetInAOERect(Actor target, WPos origin, WDir direction, float lenFront, float halfWidth, float lenBack = 0)
+    {
+        var rectCenterOffset = (lenFront - lenBack) / 2;
+        var rectCenter = origin + direction * rectCenterOffset;
+        return Intersect.CircleRect(target.Position, target.HitboxRadius, rectCenter, direction, halfWidth, (lenFront + lenBack) / 2);
+    }
 
     // goal zones
     // simple goal zone that returns 1 if target is in range, useful for single-target actions
@@ -225,7 +218,7 @@ public sealed class AIHints
         var effRsq = radius * radius;
         return p => (p - target).LengthSq() <= effRsq ? weight : 0;
     }
-    public Func<WPos, float> GoalSingleTarget(Actor target, float range) => GoalSingleTarget(target.Position, range + target.HitboxRadius + 0.5f);
+    public Func<WPos, float> GoalSingleTarget(Actor target, float range, float weight = 1) => GoalSingleTarget(target.Position, range + target.HitboxRadius + 0.5f, weight);
 
     // simple goal zone that returns 1 if target is in range (usually melee), 2 if it's also in correct positional
     public Func<WPos, float> GoalSingleTarget(WPos target, Angle rotation, Positional positional, float radius)
@@ -305,6 +298,18 @@ public sealed class AIHints
         {
             var aoeTargets = aoe(p) - minAOETargets;
             return aoeTargets >= 0 ? 3 + aoeTargets : singleTarget(p);
+        };
+    }
+
+    // goal zone that returns a value between 0 and weight depending on distance to point; useful for downtime movement targets
+    public Func<WPos, float> GoalProximity(WPos destination, float maxDistance, float maxWeight)
+    {
+        var invDist = 1.0f / maxDistance;
+        return p =>
+        {
+            var dist = (p - destination).Length();
+            var weight = 1 - Math.Clamp(invDist * dist, 0, 1);
+            return maxWeight * weight;
         };
     }
 }

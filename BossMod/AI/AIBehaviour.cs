@@ -18,6 +18,7 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot) : IDi
     private bool _followMaster; // if true, our navigation target is master rather than primary target - this happens e.g. in outdoor or in dungeons during gathering trash
     private WPos _masterPrevPos;
     private DateTime _masterLastMoved;
+    private DateTime _navStartTime; // if current time is < this, navigation won't start
 
     public void Dispose()
     {
@@ -36,7 +37,9 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot) : IDi
         _afkMode = master != player && !master.InCombat && (WorldState.CurrentTime - _masterLastMoved).TotalSeconds > 10;
         bool gazeImminent = autorot.Hints.ForbiddenDirections.Count > 0 && autorot.Hints.ForbiddenDirections[0].activation <= WorldState.FutureTime(0.5f);
         bool pyreticImminent = autorot.Hints.ImminentSpecialMode.mode == AIHints.SpecialMode.Pyretic && autorot.Hints.ImminentSpecialMode.activation <= WorldState.FutureTime(1);
+        bool misdirectionMode = autorot.Hints.ImminentSpecialMode.mode == AIHints.SpecialMode.Misdirection && autorot.Hints.ImminentSpecialMode.activation <= WorldState.CurrentTime;
         bool forbidTargeting = _config.ForbidActions || _afkMode || gazeImminent || pyreticImminent;
+        bool hadNavi = _naviDecision.Destination != null;
 
         Targeting target = new();
         if (!forbidTargeting)
@@ -50,7 +53,7 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot) : IDi
         _followMaster = master != player;
 
         // note: if there are pending knockbacks, don't update navigation decision to avoid fucking up positioning
-        if (!WorldState.PendingEffects.PendingKnockbacks(player.InstanceID))
+        if (player.PendingKnockbacks.Count == 0)
         {
             _naviDecision = BuildNavigationDecision(player, master, ref target);
             // there is a difference between having a small positive leeway and having a negative one for pathfinding, prefer to keep positive
@@ -61,7 +64,10 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot) : IDi
         bool moveWithMaster = masterIsMoving && _followMaster && master != player;
         ForceMovementIn = moveWithMaster || gazeImminent || pyreticImminent ? 0 : _naviDecision.LeewaySeconds;
 
-        UpdateMovement(player, master, target, gazeImminent || pyreticImminent, !forbidTargeting ? autorot.Hints.ActionsToExecute : null);
+        if (_config.MoveDelay > 0 && !hadNavi && _naviDecision.Destination != null)
+            _navStartTime = WorldState.FutureTime(_config.MoveDelay);
+
+        UpdateMovement(player, master, target, gazeImminent || pyreticImminent, misdirectionMode ? autorot.Hints.MisdirectionThreshold : default, !forbidTargeting ? autorot.Hints.ActionsToExecute : null);
     }
 
     // returns null if we're to be idle, otherwise target to attack
@@ -172,7 +178,7 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot) : IDi
         return masterIsMoving;
     }
 
-    private void UpdateMovement(Actor player, Actor master, Targeting target, bool gazeOrPyreticImminent, ActionQueue? queueForSprint)
+    private void UpdateMovement(Actor player, Actor master, Targeting target, bool gazeOrPyreticImminent, Angle misdirectionAngle, ActionQueue? queueForSprint)
     {
         if (gazeOrPyreticImminent)
         {
@@ -181,11 +187,25 @@ sealed class AIBehaviour(AIController ctrl, RotationModuleManager autorot) : IDi
             ctrl.NaviTargetVertical = null;
             ctrl.ForceCancelCast = true;
         }
+        else if (misdirectionAngle != default && _naviDecision.Destination != null)
+        {
+            var turn = (_naviDecision.Destination.Value - player.Position).OrthoL().Dot((_naviDecision.NextWaypoint ?? _naviDecision.Destination).Value - _naviDecision.Destination.Value);
+            ctrl.NaviTargetPos = turn == 0 ? _naviDecision.Destination
+                : player.Position + (_naviDecision.Destination.Value - player.Position).Rotate(turn > 0 ? -misdirectionAngle : misdirectionAngle);
+            ctrl.AllowInterruptingCastByMovement = true;
+
+            // debug
+            //void drawLine(WPos from, WPos to, uint color) => Camera.Instance!.DrawWorldLine(new(from.X, player.PosRot.Y, from.Z), new(to.X, player.PosRot.Y, to.Z), color);
+            //var toDest = _naviDecision.Destination.Value - player.Position;
+            //drawLine(player.Position, _naviDecision.Destination.Value, 0xff00ff00);
+            //drawLine(_naviDecision.Destination.Value, _naviDecision.Destination.Value + toDest.Normalized().OrthoL(), 0xff00ff00);
+            //drawLine(player.Position, ctrl.NaviTargetPos.Value, 0xff00ffff);
+        }
         else
         {
             var toDest = _naviDecision.Destination != null ? _naviDecision.Destination.Value - player.Position : new();
             var distSq = toDest.LengthSq();
-            ctrl.NaviTargetPos = _naviDecision.Destination;
+            ctrl.NaviTargetPos = WorldState.CurrentTime >= _navStartTime ? _naviDecision.Destination : null;
             ctrl.NaviTargetVertical = master != player ? master.PosRot.Y : null;
             ctrl.AllowInterruptingCastByMovement = player.CastInfo != null && _naviDecision.LeewaySeconds <= player.CastInfo.RemainingTime - 0.5;
             ctrl.ForceCancelCast = false;

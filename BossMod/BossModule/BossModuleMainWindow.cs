@@ -62,7 +62,6 @@ public class BossModuleMainWindow : UIWindow
         if (ShowZoneModule())
         {
             _zmm.ActiveModule?.DrawGlobalHints();
-            _zmm.ActiveModule?.DrawExtra();
         }
         else if (_mgr.ActiveModule != null)
         {
@@ -95,8 +94,8 @@ public class BossModuleMainWindow : UIWindow
 
         foreach ((var start, var end, uint color) in arrows)
         {
-            Vector3 start3 = new(start.X, y, start.Z);
-            Vector3 end3 = new(end.X, y, end.Z);
+            Vector3 start3 = start.ToVec3(y);
+            Vector3 end3 = end.ToVec3(y);
             Camera.Instance.DrawWorldLine(start3, end3, color);
             var dir = Vector3.Normalize(end3 - start3);
             var arrowStart = end3 - 0.4f * dir;
@@ -112,5 +111,5 @@ public class BossModuleMainWindow : UIWindow
             _ = new BossModuleConfigWindow(_mgr.ActiveModule.Info, _mgr.WorldState);
     }
 
-    private bool ShowZoneModule() => _mgr.Config.ShowGlobalHints && !_mgr.Config.HintsInSeparateWindow && _mgr.ActiveModule?.StateMachine.ActivePhase == null && (_zmm.ActiveModule?.WantToBeDrawn() ?? false);
+    private bool ShowZoneModule() => _mgr.Config.ShowGlobalHints && !_mgr.Config.HintsInSeparateWindow && _mgr.ActiveModule?.StateMachine.ActivePhase == null && (_zmm.ActiveModule?.WantDrawHints() ?? false);
 }

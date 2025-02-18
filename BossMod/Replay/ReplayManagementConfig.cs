@@ -1,5 +1,7 @@
 ﻿namespace BossMod;
 
+public record struct ReplayMemory(string Path, bool IsOpen, DateTime PlaybackPosition);
+
 [ConfigDisplay(Name = "录像设置", Order = 0)]
 public class ReplayManagementConfig : ConfigNode
 {
@@ -27,4 +29,13 @@ public class ReplayManagementConfig : ConfigNode
 
     [PropertyDisplay("格式化录像 log")]
     public ReplayLogFormat WorldLogFormat = ReplayLogFormat.BinaryCompressed;
+
+    [PropertyDisplay("Open previously open replays on plugin reload")]
+    public bool RememberReplays;
+
+    [PropertyDisplay("Remember playback position for previously opened replays")]
+    public bool RememberReplayTimes;
+
+    // TODO: this should not be part of the actual config! figure out where to store transient user preferences...
+    public List<ReplayMemory> ReplayHistory = [];
 }
