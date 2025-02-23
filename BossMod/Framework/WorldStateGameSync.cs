@@ -68,6 +68,9 @@ sealed class WorldStateGameSync : IDisposable
     private unsafe delegate void* ProcessSystemLogMessageDelegate(uint entityId, uint logMessageId, int* args, byte argCount);
     private readonly Hook<ProcessSystemLogMessageDelegate> _processSystemLogMessageHook;
 
+    private unsafe delegate void* ProcessPacketFateInfoDelegate(ulong fateId, long startTimestamp, ulong durationSecs);
+    private readonly Hook<ProcessPacketFateInfoDelegate> _processPacketFateInfoHook;
+
     public unsafe WorldStateGameSync(WorldState ws, ActionManagerEx amex)
     {
         _ws = ws;
@@ -126,6 +129,12 @@ sealed class WorldStateGameSync : IDisposable
         _processPacketOpenTreasureHook = Service.Hook.HookFromSignature<ProcessPacketOpenTreasureDelegate>("40 53 48 83 EC 20 48 8B DA 48 8D 0D ?? ?? ?? ?? 8B 52 10 E8 ?? ?? ?? ?? 48 85 C0 74 1B", ProcessPacketOpenTreasureDetour);
         _processPacketOpenTreasureHook.Enable();
         Service.Log($"[WSG] ProcessPacketOpenTreasure address = 0x{_processPacketOpenTreasureHook.Address:X}");
+
+        //(a3 + 24), *(_QWORD *)(a3 + 32
+        // _processPacketFateInfoHook = Service.Hook.HookFromSignature<ProcessPacketFateInfoDelegate>("E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 0F B7 4B 10 48 8D 53 12 41 B8 ?? ?? ?? ??", ProcessPacketFateInfoDetour);
+        _processPacketFateInfoHook = Service.Hook.HookFromSignature<ProcessPacketFateInfoDelegate>("E8 ?? ?? ?? ?? E9 ?? ?? ?? ?? 0F B7 4E 10 48 8D 56 12 41 B8 ?? ?? ?? ??", ProcessPacketFateInfoDetour);
+        _processPacketFateInfoHook.Enable();
+        Service.Log($"[WSG] ProcessPacketFateInfo address = 0x{_processPacketFateInfoHook.Address:X}");
     }
 
     public void Dispose()
@@ -139,6 +148,7 @@ sealed class WorldStateGameSync : IDisposable
         _processPacketRSVDataHook.Dispose();
         _processSystemLogMessageHook.Dispose();
         _processPacketOpenTreasureHook.Dispose();
+        _processPacketFateInfoHook.Dispose();
         _subscriptions.Dispose();
         _netConfig.Dispose();
         _interceptor.Dispose();
@@ -261,6 +271,7 @@ sealed class WorldStateGameSync : IDisposable
             hpmp.MaxHP = chr->MaxHealth;
             hpmp.Shield = (uint)(chr->ShieldValue * 0.01f * hpmp.MaxHP);
             hpmp.CurMP = chr->Mana;
+            hpmp.MaxMP = chr->MaxMana;
             inCombat = chr->InCombat;
         }
         var targetable = obj->GetIsTargetable();
@@ -272,6 +283,8 @@ sealed class WorldStateGameSync : IDisposable
         var eventState = obj->EventState;
         var radius = obj->GetRadius();
         var mountId = chr != null ? chr->Mount.MountId : 0u;
+        var forayInfoPtr = chr != null ? chr->GetForayInfo() : null;
+        var forayInfo = forayInfoPtr == null ? default : new ActorForayInfo(forayInfoPtr->Level, forayInfoPtr->Element);
 
         if (act == null)
         {
@@ -316,6 +329,8 @@ sealed class WorldStateGameSync : IDisposable
             _ws.Execute(new ActorState.OpTarget(act.InstanceID, target));
         if (act.MountId != mountId)
             _ws.Execute(new ActorState.OpMount(act.InstanceID, mountId));
+        if (act.ForayInfo != forayInfo)
+            _ws.Execute(new ActorState.OpForayInfo(act.InstanceID, forayInfo));
 
         DispatchActorEvents(act.InstanceID);
 
@@ -905,6 +920,13 @@ sealed class WorldStateGameSync : IDisposable
     {
         var res = _processSystemLogMessageHook.Original(entityId, messageId, args, argCount);
         _globalOps.Add(new WorldState.OpSystemLogMessage(messageId, new Span<int>(args, argCount).ToArray()));
+        return res;
+    }
+
+    private unsafe void* ProcessPacketFateInfoDetour(ulong fateId, long startTimestamp, ulong durationSecs)
+    {
+        var res = _processPacketFateInfoHook.Original(fateId, startTimestamp, durationSecs);
+        _globalOps.Add(new ClientState.OpFateInfo((uint)fateId, DateTimeOffset.FromUnixTimeSeconds(startTimestamp).UtcDateTime));
         return res;
     }
 }
