@@ -18,11 +18,20 @@ jobs:
         uses: actions/setup-dotnet@v3
         with:
           dotnet-version: 8.0.x
-          
+
       - name: Download Dalamud Latest
-        run: |
-          wget https://goatcorp.github.io/dalamud-distrib/latest.zip -O ${{ env.DALAMUD_HOME }}.zip
-          unzip ${{ env.DALAMUD_HOME }}.zip -d ${{ env.DALAMUD_HOME }}
+        uses: robinraju/release-downloader@v1.11
+        with:
+          repository: 'KOGASA0X/Dalamud'
+          latest: true
+          fileName: 'latest.zip'
+          extract: true
+          out-file-path: ${{ env.DALAMUD_HOME }}
+          
+      # - name: Download Dalamud Latest
+      #   run: |
+      #     wget https://goatcorp.github.io/dalamud-distrib/latest.zip -O ${{ env.DALAMUD_HOME }}.zip
+      #     unzip ${{ env.DALAMUD_HOME }}.zip -d ${{ env.DALAMUD_HOME }}
 
       - name: Restore Project
         run: dotnet restore

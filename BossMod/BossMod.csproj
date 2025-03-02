@@ -24,19 +24,10 @@
 
   <!-- run analyzers only for release builds, since they are too expensive to run every build when iterating (1-2 mins) -->
   <PropertyGroup Condition="'$(Configuration)' == 'Release'">
-    <OutputPath>..\release</OutputPath>
-<!--    <AnalysisMode>All</AnalysisMode>-->
-<!--    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>-->
-<!--    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>-->
+    <AnalysisMode>All</AnalysisMode>
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
   </PropertyGroup>
-
-  <PropertyGroup Condition="'$(Configuration)' == 'Debug'">
-    <OutputPath>E:\Games\FFVIX\Dalamud6.0\XIVLauncher\devPlugins\BossMod\</OutputPath>
-<!--    <AnalysisMode>All</AnalysisMode>-->
-<!--    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>-->
-<!--    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>-->
-  </PropertyGroup>
-
 
   <ItemGroup>
     <Using Include="System" />
@@ -64,8 +55,7 @@
       <ReferenceOutputAssembly>false</ReferenceOutputAssembly>
       <OutputItemType>Analyzer</OutputItemType>
     </ProjectReference>
-    <ProjectReference Include="..\FFXIVClientStructs\InteropGenerator.Runtime\InteropGenerator.Runtime.csproj" />
-<!--    <ProjectReference Include="..\FFXIVClientStructs\FFXIVClientStructs\FFXIVClientStructs.csproj" />-->
+    <ProjectReference Include="..\FFXIVClientStructs\FFXIVClientStructs\FFXIVClientStructs.csproj" />
     <!--<Reference Include="FFXIVClientStructs">
       <HintPath>$(DalamudLibPath)FFXIVClientStructs.dll</HintPath>
       <Private>false</Private>
@@ -98,12 +88,6 @@
       <HintPath>$(DalamudLibPath)SharpDX.Direct3D11.dll</HintPath>
       <Private>false</Private>
     </Reference>
-
-    <Reference Include="FFXIVClientStructs">
-      <HintPath>$(DalamudLibPath)FFXIVClientStructs.dll</HintPath>
-      <Private>true</Private>
-    </Reference>
-    
   </ItemGroup>
 
   <ItemGroup>
