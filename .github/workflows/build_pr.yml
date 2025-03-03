@@ -3,9 +3,6 @@ name: Build PRs and check for errors
 on:
   pull_request:
   workflow_dispatch:
-  push:
-    branches:
-      - cn
 
 jobs:
   Build:

@@ -68,6 +68,6 @@ jobs:
             Commit: ${{ github.sha }}
             Branch: ${{ github.ref_name }}
           files: |
-            bin/Release/BossMod/latest.zip
+            BossMod/bin/Release/BossMod/latest.zip
           draft: false
           prerelease: false
