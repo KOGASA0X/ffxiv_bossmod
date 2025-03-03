@@ -45,15 +45,29 @@ jobs:
       - name: Build Project
         run: dotnet build --configuration Release BossMod/BossMod.csproj -p:AssemblyVersion=${{ env.tag }}
 
-      - name: Publish Version
-        uses: PunishXIV/dynamis-action@v1
-        id: dynamis
+      # - name: Publish Version
+      #   uses: PunishXIV/dynamis-action@v1
+      #   id: dynamis
+      #   with:
+      #     plugin_id: 30
+      #     internal_name: "BossMod"
+      #     version_number: ${{ env.tag }}
+      #     path: "BossMod/bin/Release/BossMod/latest.zip"
+      #     type: "latest"
+      #     dalamud_version: "11"
+      #   env:
+      #     PUBLISHER_KEY: ${{ secrets.PUBLISHER_KEY }}
+
+      - name: Create Release
+        uses: softprops/action-gh-release@v1
         with:
-          plugin_id: 30
-          internal_name: "BossMod"
-          version_number: ${{ env.tag }}
-          path: "BossMod/bin/Release/BossMod/latest.zip"
-          type: "latest"
-          dalamud_version: "11"
-        env:
-          PUBLISHER_KEY: ${{ secrets.PUBLISHER_KEY }}
+          tag_name: ${{ env.tag }}
+          name: Release ${{ env.tag }}
+          body: |
+            Automated Release
+            Commit: ${{ github.sha }}
+            Branch: ${{ github.ref_name }}
+          files: |
+            bin/Release/BossMod/latest.zip
+          draft: false
+          prerelease: false
